@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>DriftGuard — Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Tahoma,sans-serif;background:#0f0f0f;color:#e0e0e0;min-height:100vh}
+a{color:inherit;text-decoration:none}
+
+/* NAV */
+nav{background:#161616;border-bottom:1px solid #2a2a2a;padding:0 32px;height:52px;display:flex;align-items:center;justify-content:space-between;position:fixed;top:0;left:0;right:0;z-index:100}
+.nav-brand{font-size:15px;font-weight:700;color:#fff;display:flex;align-items:center;gap:8px}
+.nav-brand .dot{width:8px;height:8px;border-radius:50%;background:#f59e0b}
+.nav-right{display:flex;align-items:center;gap:20px;font-size:12px;color:#666}
+.nav-right span{color:#f59e0b;cursor:pointer}
+.nav-status{display:flex;align-items:center;gap:6px;font-size:11px;color:#4ade80}
+.nav-status::before{content:'';width:6px;height:6px;border-radius:50%;background:#4ade80;animation:blink 2s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+
+/* SIDEBAR */
+.layout{display:flex;padding-top:52px;min-height:100vh}
+.sidebar{width:200px;background:#111;border-right:1px solid #1e1e1e;padding:20px 0;position:fixed;top:52px;bottom:0;overflow-y:auto}
+.sidebar-item{display:flex;align-items:center;gap:10px;padding:10px 20px;font-size:12px;color:#666;cursor:pointer;transition:all 0.15s;border-left:2px solid transparent}
+.sidebar-item:hover{color:#e0e0e0;background:#161616}
+.sidebar-item.active{color:#f59e0b;border-left-color:#f59e0b;background:#161616}
+.sidebar-icon{font-size:14px;width:16px;text-align:center}
+.sidebar-section{font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:#333;padding:16px 20px 6px;margin-top:8px}
+
+/* MAIN */
+.main{margin-left:200px;padding:28px 32px;flex:1}
+.page{display:none}
+.page.active{display:block}
+
+/* PAGE HEADER */
+.page-header{margin-bottom:28px}
+.page-title{font-size:22px;font-weight:700;color:#fff;margin-bottom:4px}
+.page-sub{font-size:12px;color:#555}
+
+/* STAT CARDS */
+.stat-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+.stat{background:#161616;border:1px solid #1e1e1e;padding:18px 20px;transition:border-color 0.2s}
+.stat:hover{border-color:#2a2a2a}
+.stat-label{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#444;margin-bottom:8px}
+.stat-value{font-size:28px;font-weight:700;color:#fff;line-height:1}
+.stat-sub{font-size:11px;color:#444;margin-top:5px}
+.stat.red .stat-value{color:#f87171}
+.stat.amber .stat-value{color:#f59e0b}
+.stat.green .stat-value{color:#4ade80}
+.stat.blue .stat-value{color:#60a5fa}
+
+/* TABLE */
+.table-wrap{background:#161616;border:1px solid #1e1e1e}
+.table-head{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid #1e1e1e}
+.table-title{font-size:13px;font-weight:700;color:#fff}
+.table-actions{display:flex;gap:8px}
+.btn{font-size:11px;padding:6px 14px;cursor:pointer;border:none;font-family:Tahoma,sans-serif;transition:all 0.15s}
+.btn-amber{background:#f59e0b;color:#000;font-weight:700}
+.btn-amber:hover{background:#fbbf24}
+.btn-ghost{background:transparent;border:1px solid #2a2a2a;color:#666}
+.btn-ghost:hover{border-color:#444;color:#e0e0e0}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:10px 20px;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:#333;border-bottom:1px solid #1e1e1e;font-weight:400}
+td{padding:12px 20px;border-bottom:1px solid #111;color:#aaa;vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#191919}
+.sev{display:inline-flex;align-items:center;gap:5px;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;padding:3px 8px;font-weight:700}
+.sev.critical{background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.2)}
+.sev.high{background:rgba(251,191,36,0.1);color:#fbbf24;border:1px solid rgba(251,191,36,0.2)}
+.sev.medium{background:rgba(250,204,21,0.1);color:#facc15;border:1px solid rgba(250,204,21,0.2)}
+.sev.low{background:rgba(74,222,128,0.1);color:#4ade80;border:1px solid rgba(74,222,128,0.2)}
+.status-badge{display:inline-block;font-size:10px;padding:2px 8px;letter-spacing:0.06em}
+.status-open{background:rgba(248,113,113,0.08);color:#f87171;border:1px solid rgba(248,113,113,0.15)}
+.status-resolved{background:rgba(74,222,128,0.08);color:#4ade80;border:1px solid rgba(74,222,128,0.15)}
+.resource-type{font-family:monospace;font-size:11px;color:#60a5fa}
+.resource-id{font-family:monospace;font-size:11px;color:#666}
+.cost-pos{color:#f87171}
+.cost-neg{color:#4ade80}
+
+/* SCAN PANEL */
+.scan-panel{background:#161616;border:1px solid #1e1e1e;padding:24px;margin-bottom:20px}
+.scan-panel h3{font-size:14px;font-weight:700;margin-bottom:4px}
+.scan-panel p{font-size:12px;color:#555;margin-bottom:20px}
+.form-group{margin-bottom:16px}
+.form-label{font-size:11px;color:#555;margin-bottom:6px;display:block;letter-spacing:0.04em}
+.form-input{width:100%;background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:9px 12px;font-size:12px;font-family:Tahoma,sans-serif;outline:none;transition:border-color 0.2s}
+.form-input:focus{border-color:#f59e0b}
+textarea.form-input{height:180px;resize:vertical;font-family:monospace;font-size:11px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+/* POSTURE SCORE */
+.score-wrap{display:flex;align-items:center;gap:24px;background:#161616;border:1px solid #1e1e1e;padding:24px;margin-bottom:20px}
+.score-circle{width:80px;height:80px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-direction:column;border:3px solid #f59e0b;flex-shrink:0}
+.score-num{font-size:22px;font-weight:700;color:#f59e0b;line-height:1}
+.score-den{font-size:10px;color:#444}
+.score-info h4{font-size:14px;font-weight:700;margin-bottom:4px}
+.score-info p{font-size:12px;color:#555;line-height:1.6}
+
+/* SCAN RESULT */
+.scan-result{background:#111;border:1px solid #2a2a2a;padding:20px;margin-top:16px;display:none}
+.scan-result.show{display:block}
+.result-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.result-stat{text-align:center;padding:14px;background:#161616;border:1px solid #1e1e1e}
+.result-stat .n{font-size:24px;font-weight:700;color:#fff}
+.result-stat .l{font-size:10px;color:#444;text-transform:uppercase;letter-spacing:0.08em;margin-top:4px}
+.finding-item{background:#161616;border:1px solid #1e1e1e;padding:16px;margin-bottom:10px}
+.finding-top{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.finding-resource{font-family:monospace;font-size:11px;color:#60a5fa}
+.finding-desc{font-size:12px;color:#666;line-height:1.6;margin-bottom:8px}
+.patch-block{background:#0d0d0d;border:1px solid #1e1e1e;padding:12px;font-family:monospace;font-size:11px;color:#4ade80;white-space:pre-wrap;margin-top:8px}
+.patch-label{font-size:10px;color:#333;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px}
+
+/* WORKSPACE CARDS */
+.ws-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+.ws-card{background:#161616;border:1px solid #1e1e1e;padding:20px;transition:border-color 0.2s;cursor:default}
+.ws-card:hover{border-color:#2a2a2a}
+.ws-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}
+.ws-name{font-size:14px;font-weight:700;color:#fff}
+.ws-provider{font-size:10px;color:#f59e0b;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.15);padding:2px 8px;letter-spacing:0.06em}
+.ws-meta{font-size:11px;color:#444;line-height:1.8}
+.ws-meta span{color:#666}
+.ws-footer{margin-top:14px;padding-top:12px;border-top:1px solid #1e1e1e;display:flex;gap:8px}
+
+/* EMPTY */
+.empty{text-align:center;padding:60px 20px;color:#333}
+.empty-icon{font-size:36px;margin-bottom:12px}
+.empty-text{font-size:13px;color:#444}
+
+/* TOAST */
+.toast{position:fixed;bottom:24px;right:24px;background:#161616;border:1px solid #2a2a2a;padding:12px 20px;font-size:12px;color:#e0e0e0;z-index:999;display:none;animation:slidein 0.2s ease}
+@keyframes slidein{from{transform:translateY(10px);opacity:0}to{transform:translateY(0);opacity:1}}
+.toast.show{display:block}
+.toast.success{border-color:rgba(74,222,128,0.3);color:#4ade80}
+.toast.error{border-color:rgba(248,113,113,0.3);color:#f87171}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-brand">
+    <span class="dot"></span>
+    DriftGuard
+  </div>
+  <div class="nav-right">
+    <div class="nav-status">API Connected</div>
+    <span onclick="showPage('settings')">Settings</span>
+    <span style="color:#666">Edwin Jonathan</span>
+  </div>
+</nav>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-section">Main</div>
+    <div class="sidebar-item active" onclick="showPage('dashboard')">
+      <span class="sidebar-icon">▦</span> Dashboard
+    </div>
+    <div class="sidebar-item" onclick="showPage('scan')">
+      <span class="sidebar-icon">⟳</span> Run Scan
+    </div>
+    <div class="sidebar-item" onclick="showPage('findings')">
+      <span class="sidebar-icon">◈</span> Findings
+    </div>
+    <div class="sidebar-section">Infrastructure</div>
+    <div class="sidebar-item" onclick="showPage('workspaces')">
+      <span class="sidebar-icon">⊞</span> Workspaces
+    </div>
+    <div class="sidebar-section">Account</div>
+    <div class="sidebar-item" onclick="showPage('settings')">
+      <span class="sidebar-icon">◎</span> Settings
+    </div>
+    <div class="sidebar-item" onclick="window.open('http://localhost:8000/docs')">
+      <span class="sidebar-icon">⌘</span> API Docs
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- DASHBOARD -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div class="page-title">Dashboard</div>
+        <div class="page-sub">Infrastructure posture overview</div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat amber">
+          <div class="stat-label">Posture Score</div>
+          <div class="stat-value" id="dash-score">100</div>
+          <div class="stat-sub">out of 100</div>
+        </div>
+        <div class="stat red">
+          <div class="stat-label">Open Findings</div>
+          <div class="stat-value" id="dash-findings">0</div>
+          <div class="stat-sub">across all workspaces</div>
+        </div>
+        <div class="stat red">
+          <div class="stat-label">Critical</div>
+          <div class="stat-value" id="dash-critical">0</div>
+          <div class="stat-sub">require immediate action</div>
+        </div>
+        <div class="stat blue">
+          <div class="stat-label">Workspaces</div>
+          <div class="stat-value" id="dash-workspaces">0</div>
+          <div class="stat-sub">monitored</div>
+        </div>
+      </div>
+
+      <div class="score-wrap">
+        <div class="score-circle">
+          <div class="score-num" id="score-circle-num">100</div>
+          <div class="score-den">/100</div>
+        </div>
+        <div class="score-info">
+          <h4>Security Posture</h4>
+          <p id="score-desc">No scans run yet. Run your first scan to get a posture score.<br>DriftGuard checks your infrastructure against CIS AWS Benchmarks and MITRE ATT&CK.</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-head">
+          <div class="table-title">Recent Findings</div>
+          <div class="table-actions">
+            <button class="btn btn-ghost" onclick="loadFindings()">Refresh</button>
+            <button class="btn btn-amber" onclick="showPage('scan')">Run Scan</button>
+          </div>
+        </div>
+        <div id="findings-table-wrap">
+          <div class="empty">
+            <div class="empty-icon">◈</div>
+            <div class="empty-text">No findings yet. Run a scan to detect infrastructure drift.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCAN -->
+    <div class="page" id="page-scan">
+      <div class="page-header">
+        <div class="page-title">Run Drift Scan</div>
+        <div class="page-sub">Paste your terraform.tfstate content below and hit Scan</div>
+      </div>
+
+      <div class="scan-panel">
+        <h3>Scan Configuration</h3>
+        <p>Paste your Terraform state file JSON. DriftGuard will compare it against your live AWS infrastructure and detect every attribute that has drifted.</p>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Workspace Name</label>
+            <input class="form-input" id="ws-name" placeholder="e.g. production-us-east-1" value="production"/>
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Region</label>
+            <input class="form-input" id="ws-region" placeholder="us-east-1" value="us-east-1"/>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Terraform State File (JSON)</label>
+          <textarea class="form-input" id="state-input" placeholder='Paste your terraform.tfstate content here...'></textarea>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <button class="btn btn-amber" onclick="runScan()">▶ Run Scan</button>
+          <button class="btn btn-ghost" onclick="loadDemo()">Load Demo State</button>
+          <span id="scan-status" style="font-size:11px;color:#555"></span>
+        </div>
+      </div>
+
+      <div class="scan-result" id="scan-result">
+        <div class="result-grid">
+          <div class="result-stat"><div class="n" id="r-resources">0</div><div class="l">Resources</div></div>
+          <div class="result-stat"><div class="n" id="r-findings" style="color:#f87171">0</div><div class="l">Findings</div></div>
+          <div class="result-stat"><div class="n" id="r-score" style="color:#f59e0b">100</div><div class="l">Posture Score</div></div>
+          <div class="result-stat"><div class="n" id="r-cost" style="color:#f87171">$0</div><div class="l">Cost Delta/mo</div></div>
+        </div>
+        <div id="findings-list"></div>
+      </div>
+    </div>
+
+    <!-- FINDINGS -->
+    <div class="page" id="page-findings">
+      <div class="page-header">
+        <div class="page-title">All Findings</div>
+        <div class="page-sub">Every drift finding detected across all scans</div>
+      </div>
+      <div class="table-wrap">
+        <div class="table-head">
+          <div class="table-title">Findings</div>
+          <div class="table-actions">
+            <button class="btn btn-ghost" onclick="loadFindings()">Refresh</button>
+          </div>
+        </div>
+        <div id="all-findings-wrap">
+          <div class="empty">
+            <div class="empty-icon">◈</div>
+            <div class="empty-text">No findings yet. Run a scan first.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WORKSPACES -->
+    <div class="page" id="page-workspaces">
+      <div class="page-header">
+        <div class="page-title">Workspaces</div>
+        <div class="page-sub">Each workspace monitors one AWS environment</div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <input class="form-input" id="new-ws-name" placeholder="Workspace name e.g. production" style="width:220px"/>
+        <input class="form-input" id="new-ws-region" placeholder="Region e.g. us-east-1" style="width:180px"/>
+        <button class="btn btn-amber" onclick="createWorkspace()">+ Add Workspace</button>
+      </div>
+      <div class="ws-grid" id="ws-grid">
+        <div class="empty" style="grid-column:span 3">
+          <div class="empty-icon">⊞</div>
+          <div class="empty-text">No workspaces yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <div class="page-title">Settings</div>
+        <div class="page-sub">API configuration and connections</div>
+      </div>
+      <div class="scan-panel">
+        <h3>API Connection</h3>
+        <p>DriftGuard API endpoint</p>
+        <div class="form-group">
+          <label class="form-label">API URL</label>
+          <input class="form-input" id="api-url" value="http://localhost:8000"/>
+        </div>
+        <button class="btn btn-amber" onclick="testConnection()">Test Connection</button>
+        <span id="conn-status" style="font-size:11px;color:#555;margin-left:12px"></span>
+      </div>
+      <div class="scan-panel" style="margin-top:16px">
+        <h3>About DriftGuard</h3>
+        <p style="color:#555;font-size:12px;line-height:1.8;margin-bottom:0">
+          Version 1.0.0 · Built by Edwin Jonathan Chibuike<br>
+          Open-source cloud infrastructure drift detection.<br>
+          github.com/EdwinJdevops/driftguard
+        </p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'http://localhost:8000';
+let allFindings = [];
+let workspaces = [];
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event && event.target.closest('.sidebar-item') && event.target.closest('.sidebar-item').classList.add('active');
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'findings') loadFindings();
+}
+
+function toast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function loadDashboard() {
+  try {
+    const r = await fetch(API + '/dashboard/stats');
+    const d = await r.json();
+    document.getElementById('dash-score').textContent = d.posture_score || 100;
+    document.getElementById('score-circle-num').textContent = d.posture_score || 100;
+    document.getElementById('dash-findings').textContent = d.open_findings || allFindings.length;
+    document.getElementById('dash-critical').textContent = d.critical_findings || allFindings.filter(f=>f.severity==='critical').length;
+    document.getElementById('dash-workspaces').textContent = workspaces.length;
+  } catch(e) {}
+  renderFindingsTable();
+}
+
+function renderFindingsTable() {
+  const wrap = document.getElementById('findings-table-wrap');
+  if (!allFindings.length) {
+    wrap.innerHTML = '<div class="empty"><div class="empty-icon">◈</div><div class="empty-text">No findings yet. Run a scan to detect infrastructure drift.</div></div>';
+    return;
+  }
+  wrap.innerHTML = `<table>
+    <thead><tr>
+      <th>Severity</th><th>Resource</th><th>Drift Type</th>
+      <th>Security Impact</th><th>Cost Delta</th><th>Status</th>
+    </tr></thead>
+    <tbody>${allFindings.map(f => `
+    <tr>
+      <td><span class="sev ${f.severity}">${f.severity}</span></td>
+      <td><div class="resource-type">${f.resource_type}</div><div class="resource-id">${f.resource_id}</div></td>
+      <td><span style="font-size:11px;color:#666">${f.drift_type}</span></td>
+      <td style="font-size:11px;color:#666;max-width:200px">${(f.security_impact&&f.security_impact[0])||'—'}</td>
+      <td>${f.cost_delta ? `<span class="cost-pos">+$${f.cost_delta}/mo</span>` : '—'}</td>
+      <td><span class="status-badge status-open">open</span></td>
+    </tr>`).join('')}
+    </tbody></table>`;
+}
+
+async function loadFindings() {
+  try {
+    const r = await fetch(API + '/findings');
+    const d = await r.json();
+    allFindings = d.findings || [];
+    renderFindingsTable();
+    const wrap = document.getElementById('all-findings-wrap');
+    if (!allFindings.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-icon">◈</div><div class="empty-text">No findings yet. Run a scan first.</div></div>';
+      return;
+    }
+    wrap.innerHTML = `<table>
+      <thead><tr><th>Severity</th><th>Resource</th><th>Drift Type</th><th>Security Impact</th><th>Compliance</th><th>Cost/mo</th></tr></thead>
+      <tbody>${allFindings.map(f=>`
+      <tr>
+        <td><span class="sev ${f.severity}">${f.severity}</span></td>
+        <td><div class="resource-type">${f.resource_type}</div><div class="resource-id">${f.resource_id}</div></td>
+        <td><span style="font-size:11px;color:#666">${f.drift_type}</span></td>
+        <td style="font-size:11px;color:#555;max-width:180px">${(f.security_impact&&f.security_impact[0])||'—'}</td>
+        <td style="font-size:11px;color:#555;max-width:180px">${(f.compliance_violations&&f.compliance_violations[0])||'—'}</td>
+        <td>${f.cost_delta?`<span class="cost-pos">+$${f.cost_delta}</span>`:'—'}</td>
+      </tr>`).join('')}
+      </tbody></table>`;
+  } catch(e) { toast('Could not load findings','error'); }
+}
+
+function loadDemo() {
+  document.getElementById('state-input').value = JSON.stringify({
+    version:4,
+    resources:[
+      {mode:"managed",type:"aws_instance",name:"web_server",instances:[{attributes:{id:"i-0abc123def456",instance_type:"t3.micro",vpc_security_group_ids:["sg-111aaa"],tags:{Name:"web-server",Env:"prod"}}}]},
+      {mode:"managed",type:"aws_s3_bucket",name:"data_bucket",instances:[{attributes:{id:"company-data-prod",versioning:"Enabled",server_side_encryption_configuration:{rule:"AES256"},acl:"private"}}]},
+      {mode:"managed",type:"aws_db_instance",name:"prod_db",instances:[{attributes:{id:"prod-db-main",instance_class:"db.t3.medium",publicly_accessible:false,storage_encrypted:true}}]}
+    ]
+  }, null, 2);
+  toast('Demo state loaded — hit Run Scan');
+}
+
+async function runScan() {
+  const stateRaw = document.getElementById('state-input').value.trim();
+  if (!stateRaw) { toast('Paste a terraform.tfstate first','error'); return; }
+  let state;
+  try { state = JSON.parse(stateRaw); }
+  catch(e) { toast('Invalid JSON in state file','error'); return; }
+
+  document.getElementById('scan-status').textContent = 'Scanning...';
+  document.getElementById('scan-result').classList.remove('show');
+
+  try {
+    const r = await fetch(API + '/workspaces/demo-ws/scan', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer demo-token'},
+      body: JSON.stringify({state_file_content: state})
+    });
+    const data = await r.json();
+    const scanId = data.scan_id;
+    document.getElementById('scan-status').textContent = 'Processing...';
+
+    // Poll for results
+    let result = null;
+    for (let i = 0; i < 10; i++) {
+      await new Promise(res => setTimeout(res, 800));
+      const r2 = await fetch(API + '/scans/' + scanId);
+      const d2 = await r2.json();
+      if (d2.status === 'completed' || d2.status === 'failed') { result = d2; break; }
+    }
+
+    if (!result || result.status !== 'completed') {
+      document.getElementById('scan-status').textContent = 'Scan complete';
+      toast('Scan queued — refresh findings in a moment');
+      return;
+    }
+
+    document.getElementById('scan-status').textContent = 'Complete';
+    const findings = result.findings || [];
+    allFindings = [...allFindings, ...findings];
+
+    document.getElementById('r-resources').textContent = result.total_resources || 0;
+    document.getElementById('r-findings').textContent = findings.length;
+    document.getElementById('r-score').textContent = result.posture_score || 100;
+    const totalCost = findings.reduce((a,f) => a+(f.cost_delta||0), 0);
+    document.getElementById('r-cost').textContent = totalCost ? '$'+totalCost.toFixed(2) : '$0';
+
+    const list = document.getElementById('findings-list');
+    if (!findings.length) {
+      list.innerHTML = '<div style="padding:20px;text-align:center;color:#4ade80;font-size:13px">✓ No drift detected. Infrastructure matches Terraform state.</div>';
+    } else {
+      list.innerHTML = findings.map(f => `
+        <div class="finding-item">
+          <div class="finding-top">
+            <span class="sev ${f.severity}">${f.severity}</span>
+            <span class="finding-resource">${f.resource_type} / ${f.resource_id}</span>
+            <span style="font-size:11px;color:#444">${f.drift_type}</span>
+            ${f.cost_delta ? `<span class="cost-pos" style="margin-left:auto">+$${f.cost_delta}/mo</span>` : ''}
+          </div>
+          ${f.security_impact&&f.security_impact.length ? `<div class="finding-desc">⚠ ${f.security_impact[0]}</div>` : ''}
+          ${f.compliance_violations&&f.compliance_violations.length ? `<div class="finding-desc" style="color:#f59e0b">◈ ${f.compliance_violations[0]}</div>` : ''}
+          ${f.terraform_patch ? `<div class="patch-label">Terraform Patch</div><div class="patch-block">${f.terraform_patch}</div>` : ''}
+        </div>`).join('');
+    }
+
+    document.getElementById('scan-result').classList.add('show');
+    toast(findings.length + ' finding(s) detected', findings.length ? 'error' : 'success');
+    loadDashboard();
+  } catch(e) {
+    document.getElementById('scan-status').textContent = '';
+    toast('Scan failed: ' + e.message, 'error');
+  }
+}
+
+async function createWorkspace() {
+  const name = document.getElementById('new-ws-name').value.trim();
+  const region = document.getElementById('new-ws-region').value.trim() || 'us-east-1';
+  if (!name) { toast('Enter a workspace name','error'); return; }
+  try {
+    const r = await fetch(API + '/workspaces', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer demo-token'},
+      body: JSON.stringify({name, provider:'aws', region})
+    });
+    const ws = await r.json();
+    workspaces.push(ws);
+    renderWorkspaces();
+    document.getElementById('new-ws-name').value = '';
+    toast('Workspace created');
+  } catch(e) { toast('Failed to create workspace','error'); }
+}
+
+function renderWorkspaces() {
+  const grid = document.getElementById('ws-grid');
+  if (!workspaces.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:span 3"><div class="empty-icon">⊞</div><div class="empty-text">No workspaces yet.</div></div>';
+    return;
+  }
+  grid.innerHTML = workspaces.map(ws => `
+    <div class="ws-card">
+      <div class="ws-card-top">
+        <div class="ws-name">${ws.name}</div>
+        <span class="ws-provider">${ws.provider.toUpperCase()}</span>
+      </div>
+      <div class="ws-meta">
+        Region: <span>${ws.region}</span><br>
+        Scan interval: <span>${ws.scan_interval_minutes} min</span><br>
+        Auto-PR: <span>${ws.auto_pr_enabled ? 'Enabled' : 'Disabled'}</span>
+      </div>
+      <div class="ws-footer">
+        <button class="btn btn-amber" onclick="showPage('scan')">Scan Now</button>
+        <button class="btn btn-ghost">Settings</button>
+      </div>
+    </div>`).join('');
+}
+
+async function testConnection() {
+  const url = document.getElementById('api-url').value;
+  const el = document.getElementById('conn-status');
+  el.textContent = 'Testing...';
+  try {
+    const r = await fetch(url + '/health');
+    const d = await r.json();
+    el.textContent = '✓ Connected — API v' + d.version;
+    el.style.color = '#4ade80';
+    toast('Connected successfully','success');
+  } catch(e) {
+    el.textContent = '✗ Cannot reach API';
+    el.style.color = '#f87171';
+    toast('Connection failed','error');
+  }
+}
+
+// Init
+loadDashboard();
+</script>
+</body>
+</html>
