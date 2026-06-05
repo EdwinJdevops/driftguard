@@ -1,0 +1,2 @@
+[phases.install]
+cmds = ["pip install fastapi uvicorn sqlalchemy asyncpg celery redis boto3 httpx python-jose passlib bcrypt pydantic pydantic-settings structlog rich tenacity"]
