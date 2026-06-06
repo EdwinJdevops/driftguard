@@ -18,6 +18,9 @@ This is infrastructure drift. DriftGuard catches it automatically.
 - Generates the exact Terraform HCL patch to fix each finding
 - Opens a GitHub PR automatically with the fix
 
+**Live API:** https://driftguard-endm.onrender.com
+**API Docs:** https://driftguard-endm.onrender.com/docs
+
 ## Quick Start
 
 ```bash
