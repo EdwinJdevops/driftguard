@@ -1,0 +1,6 @@
+-r requirements.txt
+pytest
+pytest-asyncio
+moto[s3,rds,ec2]
+ruff
+mypy
