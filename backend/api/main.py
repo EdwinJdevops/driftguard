@@ -10,11 +10,13 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import boto3
 import structlog
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -110,8 +112,8 @@ def register_routes(app: FastAPI):
     async def health():
         return {"status": "ok", "version": "2.0.0", "timestamp": datetime.now(timezone.utc).isoformat()}
 
-    @app.get("/")
-    async def root():
+    @app.get("/api")
+    async def api_info():
         return {
             "name": "DriftGuard",
             "tagline": "Detect drift. Fix it. Keep your cloud honest.",
@@ -321,6 +323,19 @@ def register_routes(app: FastAPI):
             ],
             "total": len(findings),
         }
+
+    # ── DASHBOARD (static files) ──────────────────────────────────────
+    # Mounted last and deliberately: Starlette matches explicit routes
+    # registered above (health, signup, workspaces, scans, findings, docs)
+    # before falling through to this mount. Any path not matched by an
+    # explicit route above is served from frontend/, with "/" resolving
+    # to index.html. This makes one deployment serve both the API and
+    # the dashboard — no separate frontend host required.
+    frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
+    if frontend_dir.exists():
+        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="dashboard")
+    else:
+        log.warning("Frontend directory not found, dashboard will not be served", path=str(frontend_dir))
 
 
 async def run_scan_pipeline(
