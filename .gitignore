@@ -4,3 +4,15 @@ __pycache__/
 .env
 .pytest_cache/
 *.egg-info/
+
+# VS Code extension build output
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix
+
+# CLI build artifacts
+cli/*.egg-info/
+cli/build/
+
+# Node
+node_modules/

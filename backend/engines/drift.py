@@ -376,7 +376,7 @@ class DriftAnalyzer:
     def _generate_terraform_patch(self, rtype, rname, diffs) -> str | None:
         if not diffs:
             return None
-        lines = [f'# DriftGuard patch — restores declared state', f'resource "{rtype}" "{rname}" {{']
+        lines = ['# DriftGuard patch — restores declared state', f'resource "{rtype}" "{rname}" {{']
         for attr, (expected_val, _) in diffs.items():
             if expected_val is None:
                 continue

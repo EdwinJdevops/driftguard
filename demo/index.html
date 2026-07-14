@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DriftGuard — Interactive Demo</title>
+<style>
+  :root {
+    --bg: #0B0F14;
+    --panel: #111820;
+    --panel-border: #1E2A38;
+    --text: #E6EDF3;
+    --text-dim: #7B8794;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+    --sans: -apple-system, "Inter", "Segoe UI", sans-serif;
+
+    --critical: #F85149;
+    --high: #F0883E;
+    --medium: #E3B341;
+    --low: #6E7681;
+    --good: #3FB950;
+    --accent: #58A6FF;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .demo-banner {
+    background: linear-gradient(90deg, #1E2A38, #111820);
+    border-bottom: 1px solid var(--panel-border);
+    padding: 10px 20px;
+    font-size: 13px;
+    color: var(--text-dim);
+    text-align: center;
+  }
+  .demo-banner strong { color: var(--medium); }
+
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 36px;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand svg { width: 34px; height: 34px; flex-shrink: 0; }
+  .brand-name { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+  .brand-tag { font-size: 13px; color: var(--text-dim); font-family: var(--mono); }
+
+  .top-actions a {
+    font-size: 13px;
+    color: var(--text-dim);
+    text-decoration: none;
+    margin-left: 18px;
+    border-bottom: 1px dotted transparent;
+  }
+  .top-actions a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Stat row ─────────────────────────────────────────── */
+  .stat-row {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  @media (max-width: 720px) { .stat-row { grid-template-columns: 1fr 1fr; } }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+
+  .gauge-card { display: flex; align-items: center; gap: 18px; }
+  .gauge-label { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+  .gauge-value { font-family: var(--mono); font-size: 15px; }
+
+  .stat-label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .stat-value { font-family: var(--mono); font-size: 26px; font-weight: 600; }
+  .stat-value.critical-num { color: var(--critical); }
+  .stat-value.cost-num { color: var(--medium); }
+
+  /* ── Findings table ───────────────────────────────────── */
+  .section-title {
+    font-size: 14px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 32px 0 12px;
+  }
+
+  .finding {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    overflow: hidden;
+  }
+  .finding-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 140px 24px;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .finding-row:hover { background: #14202C; }
+
+  .sev-chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 5px;
+    text-align: center;
+    letter-spacing: 0.03em;
+  }
+  .sev-critical { background: rgba(248,81,73,0.15); color: var(--critical); border: 1px solid rgba(248,81,73,0.4); }
+  .sev-high     { background: rgba(240,136,62,0.15); color: var(--high); border: 1px solid rgba(240,136,62,0.4); }
+  .sev-medium   { background: rgba(227,179,65,0.15); color: var(--medium); border: 1px solid rgba(227,179,65,0.4); }
+
+  .finding-main .resource { font-family: var(--mono); font-size: 14px; }
+  .finding-main .summary { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+
+  .finding-cost { font-family: var(--mono); font-size: 13px; color: var(--text-dim); text-align: right; }
+  .finding-cost.has-cost { color: var(--medium); }
+
+  .chevron { color: var(--text-dim); transition: transform 0.15s ease; }
+  .finding.open .chevron { transform: rotate(90deg); }
+
+  .finding-detail {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+    border-top: 1px solid var(--panel-border);
+  }
+  .finding.open .finding-detail { max-height: 600px; }
+
+  .detail-inner { padding: 16px 18px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .detail-inner { grid-template-columns: 1fr; } }
+
+  .diff-col h4 { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .diff-block {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: #0B0F14;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+  .diff-block .removed { color: var(--critical); }
+  .diff-block .added { color: var(--good); }
+
+  .patch-col .diff-block { border-color: #2D3D2A; background: #0D120E; }
+  .patch-actions { margin-top: 10px; display: flex; gap: 10px; }
+
+  button.btn {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--panel-border);
+    background: #1A2530;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  button.btn:hover { background: #22303E; border-color: #3A4B5C; }
+  button.btn.primary { background: var(--good); border-color: var(--good); color: #04150A; }
+  button.btn.primary:hover { background: #4CD964; }
+  button.btn.small { font-size: 11.5px; padding: 5px 10px; }
+
+  .pr-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--good);
+    margin-top: 8px;
+  }
+  .pr-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--good); }
+
+  /* ── Trigger scan panel ───────────────────────────────── */
+  .scan-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .scan-panel .left { display: flex; align-items: center; gap: 14px; }
+  .scan-status-text { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+  .scan-status-text.active { color: var(--accent); }
+  .scan-status-text.done { color: var(--good); }
+
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--panel-border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: none;
+  }
+  .spinner.active { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  footer.demo-footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 1px solid var(--panel-border);
+    font-size: 12.5px;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  footer.demo-footer a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<div class="demo-banner">
+  <strong>Demo data</strong> — this page renders realistic, illustrative findings so you can see the workflow. It is not a live scan of real infrastructure.
+</div>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="brand">
+      <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect width="40" height="40" rx="9" fill="#111820" stroke="#1E2A38"/>
+        <path d="M20 8 L30 13 V20 C30 27 25.5 31 20 33 C14.5 31 10 27 10 20 V13 Z" stroke="#58A6FF" stroke-width="1.6" fill="none"/>
+        <path d="M20 15 V25 M15 20 H25" stroke="#F0883E" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="brand-name">DriftGuard</div>
+        <div class="brand-tag">terraform drift, detected and priced</div>
+      </div>
+    </div>
+    <nav class="top-actions">
+      <a href="https://github.com/EdwinJdevops/driftguard" target="_blank" rel="noopener">GitHub</a>
+      <a href="../README.md">Docs</a>
+      <a href="../cli/README.md">CLI</a>
+      <a href="../vscode-extension/README.md">VS Code</a>
+    </nav>
+  </header>
+
+  <!-- Trigger scan panel -->
+  <div class="card scan-panel" style="margin-bottom: 24px;">
+    <div class="left">
+      <button class="btn primary" id="scanBtn" onclick="runDemoScan()">▶ Trigger scan</button>
+      <span class="scan-status-text" id="scanStatus">workspace: prod-infra · us-east-1</span>
+    </div>
+    <div class="spinner" id="spinner"></div>
+  </div>
+
+  <div class="stat-row" id="statRow" style="opacity: 0.35; pointer-events: none;">
+    <div class="card gauge-card">
+      <svg id="gaugeSvg" width="64" height="64" viewBox="0 0 64 64">
+        <circle cx="32" cy="32" r="27" stroke="#1E2A38" stroke-width="7" fill="none"/>
+        <circle id="gaugeArc" cx="32" cy="32" r="27" stroke="#F0883E" stroke-width="7" fill="none"
+                stroke-linecap="round" stroke-dasharray="169.6" stroke-dashoffset="169.6"
+                transform="rotate(-90 32 32)"/>
+        <text id="gaugeText" x="32" y="37" text-anchor="middle" font-family="ui-monospace, monospace" font-size="15" fill="#E6EDF3">--</text>
+      </svg>
+      <div>
+        <div class="gauge-label">Posture score</div>
+        <div class="gauge-value" id="gaugeSubtext">awaiting scan</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Resources checked</div>
+      <div class="stat-value" id="statResources">--</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Drift found</div>
+      <div class="stat-value critical-num" id="statDrift">--</div>
+    </div>
+    <div class="card">
+      <div class="stat-label">Monthly cost impact</div>
+      <div class="stat-value cost-num" id="statCost">--</div>
+    </div>
+  </div>
+
+  <div class="section-title" id="findingsTitle" style="opacity:0.35;">Findings</div>
+  <div id="findingsList"></div>
+
+  <footer class="demo-footer">
+    <span>DriftGuard v2.0.0 · MIT License</span>
+    <span>Findings mirror the real severity rules in <a href="https://github.com/EdwinJdevops/driftguard/blob/main/backend/engines/drift.py" target="_blank" rel="noopener">backend/engines/drift.py</a> — not invented for this demo.</span>
+  </footer>
+
+</div>
+
+<script>
+// Mock findings mirror the ACTUAL rules in backend/engines/drift.py:
+// - RDS made publicly_accessible -> CRITICAL
+// - S3 encryption removed -> compliance violation (medium/high depending on config)
+// - Security group ingress 0.0.0.0/0:22 -> CIS violation, high
+// This is representative sample data, not a live scan result.
+const MOCK_FINDINGS = [
+  {
+    severity: "critical",
+    resource_type: "aws_db_instance",
+    resource_id: "prod-orders-db",
+    drift_type: "modified",
+    summary: "publicly_accessible flipped to true outside Terraform — RDS instance is now reachable from the internet.",
+    cost_delta: null,
+    before: "publicly_accessible = false\nstorage_encrypted   = true",
+    after:  "publicly_accessible = <span class=\"removed\">false</span> → <span class=\"added\">true</span>\nstorage_encrypted   = true",
+    patch: "resource \"aws_db_instance\" \"prod_orders_db\" {\n  # restores declared state\n  publicly_accessible = false\n}",
+    pr: { number: 42, url: "#" },
+  },
+  {
+    severity: "high",
+    resource_type: "aws_security_group",
+    resource_id: "sg-0a12f8e91c",
+    drift_type: "modified",
+    summary: "Inbound rule 0.0.0.0/0:22 added outside Terraform — CIS AWS Benchmark 5.2 violation.",
+    cost_delta: null,
+    before: "ingress = []",
+    after:  "ingress = [<span class=\"added\">{ cidr: \"0.0.0.0/0\", port: 22 }</span>]",
+    patch: "resource \"aws_security_group\" \"web\" {\n  # restores declared ingress rules\n  ingress = []\n}",
+    pr: null,
+  },
+  {
+    severity: "medium",
+    resource_type: "aws_s3_bucket",
+    resource_id: "acme-user-uploads",
+    drift_type: "modified",
+    summary: "server_side_encryption_configuration removed — objects now written unencrypted.",
+    cost_delta: null,
+    before: "server_side_encryption_configuration {\n  rule { apply_server_side_encryption_by_default { sse_algorithm = \"AES256\" } }\n}",
+    after:  "<span class=\"removed\">server_side_encryption_configuration { ... }</span>\n(block removed)",
+    patch: "resource \"aws_s3_bucket_server_side_encryption_configuration\" \"uploads\" {\n  bucket = \"acme-user-uploads\"\n  rule {\n    apply_server_side_encryption_by_default {\n      sse_algorithm = \"AES256\"\n    }\n  }\n}",
+    pr: { number: 41, url: "#" },
+  },
+  {
+    severity: "medium",
+    resource_type: "aws_instance",
+    resource_id: "i-0d4f7a2b91",
+    drift_type: "modified",
+    summary: "instance_type resized from t3.medium to m5.xlarge outside Terraform.",
+    cost_delta: 187.20,
+    before: "instance_type = \"t3.medium\"",
+    after:  "instance_type = <span class=\"removed\">\"t3.medium\"</span> → <span class=\"added\">\"m5.xlarge\"</span>",
+    patch: "resource \"aws_instance\" \"web\" {\n  # restores declared state\n  instance_type = \"t3.medium\"\n}",
+    pr: null,
+  },
+];
+
+const SEV_LABEL = { critical: "CRIT", high: "HIGH", medium: "MED" };
+
+function buildFindingHTML(f, idx) {
+  const costDisplay = f.cost_delta ? `$${f.cost_delta.toFixed(2)}/mo` : "—";
+  const costClass = f.cost_delta ? "finding-cost has-cost" : "finding-cost";
+  const prBlock = f.pr
+    ? `<div class="pr-status"><span class="dot"></span> PR #${f.pr.number} opened — driftguard/fix-${f.resource_id.slice(0,8)}</div>`
+    : `<div class="patch-actions"><button class="btn small primary" onclick="event.stopPropagation(); openPR(${idx})">Open remediation PR</button></div>`;
+
+  return `
+    <div class="finding" id="finding-${idx}">
+      <div class="finding-row" onclick="toggleFinding(${idx})">
+        <span class="sev-chip sev-${f.severity}">${SEV_LABEL[f.severity]}</span>
+        <div class="finding-main">
+          <div class="resource">${f.resource_type} / ${f.resource_id}</div>
+          <div class="summary">${f.summary}</div>
+        </div>
+        <div class="${costClass}">${costDisplay}</div>
+        <div class="chevron">▶</div>
+      </div>
+      <div class="finding-detail">
+        <div class="detail-inner">
+          <div class="diff-col">
+            <h4>Declared → Actual</h4>
+            <div class="diff-block">${f.after}</div>
+          </div>
+          <div class="patch-col">
+            <h4>Suggested patch</h4>
+            <div class="diff-block">${f.patch}</div>
+            ${prBlock}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleFinding(idx) {
+  document.getElementById(`finding-${idx}`).classList.toggle("open");
+}
+
+function openPR(idx) {
+  MOCK_FINDINGS[idx].pr = { number: 40 + idx, url: "#" };
+  document.getElementById("findingsList").innerHTML = MOCK_FINDINGS.map(buildFindingHTML).join("");
+  document.getElementById(`finding-${idx}`).classList.add("open");
+}
+
+function animateGauge(score) {
+  const circumference = 169.6;
+  const arc = document.getElementById("gaugeArc");
+  const text = document.getElementById("gaugeText");
+  const color = score >= 80 ? "#3FB950" : score >= 60 ? "#E3B341" : "#F85149";
+  arc.setAttribute("stroke", color);
+  let current = 0;
+  const target = score;
+  const step = () => {
+    current += 2;
+    if (current > target) current = target;
+    const offset = circumference - (circumference * current) / 100;
+    arc.setAttribute("stroke-dashoffset", offset);
+    text.textContent = current;
+    if (current < target) requestAnimationFrame(step);
+  };
+  step();
+}
+
+function runDemoScan() {
+  const btn = document.getElementById("scanBtn");
+  const statusEl = document.getElementById("scanStatus");
+  const spinner = document.getElementById("spinner");
+  const statRow = document.getElementById("statRow");
+  const findingsTitle = document.getElementById("findingsTitle");
+
+  btn.disabled = true;
+  spinner.classList.add("active");
+  statusEl.textContent = "scanning 214 resources against terraform.tfstate...";
+  statusEl.className = "scan-status-text active";
+  document.getElementById("findingsList").innerHTML = "";
+
+  setTimeout(() => {
+    spinner.classList.remove("active");
+    statusEl.textContent = "scan complete — 4 findings, posture 78/100";
+    statusEl.className = "scan-status-text done";
+    btn.disabled = false;
+
+    statRow.style.opacity = "1";
+    statRow.style.pointerEvents = "auto";
+    findingsTitle.style.opacity = "1";
+
+    document.getElementById("statResources").textContent = "214";
+    document.getElementById("statDrift").textContent = "4";
+    document.getElementById("statCost").textContent = "$187.20";
+    document.getElementById("gaugeSubtext").textContent = "2 critical/high";
+    animateGauge(78);
+
+    document.getElementById("findingsList").innerHTML = MOCK_FINDINGS.map(buildFindingHTML).join("");
+  }, 1600);
+}
+</script>
+
+</body>
+</html>

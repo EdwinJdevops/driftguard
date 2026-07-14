@@ -1,54 +1,83 @@
 # DriftGuard
 
-Terraform drift detection for AWS. Compares `terraform.tfstate` against live AWS API state, scores each discrepancy against CIS AWS Benchmarks and MITRE ATT&CK, calculates the monthly cost delta, and generates a Terraform patch to restore the declared state.
+[![CI](https://github.com/EdwinJdevops/driftguard/actions/workflows/ci.yml/badge.svg)](https://github.com/EdwinJdevops/driftguard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3FB950.svg)](LICENSE)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-58A6FF.svg)](requirements.txt)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-F0883E.svg)](#contributing)
+
+**Terraform drift detection and remediation.** Compares `terraform.tfstate` against live AWS state, scores every discrepancy against CIS AWS Benchmarks and MITRE ATT&CK, prices the monthly cost delta, and opens a GitHub PR with a suggested Terraform patch — for a human to review, not to auto-merge.
+
+**[▶ Interactive demo](demo/index.html)** · **[CLI](cli/README.md)** · **[VS Code extension](vscode-extension/README.md)** · **[API docs](#api)**
+
+---
 
 ## The problem
 
-Terraform state describes what your infrastructure should look like. It does not verify that your infrastructure still looks like that. A security group rule changed through the console, an S3 bucket with encryption disabled mid-incident, an RDS instance flipped to publicly accessible — none of it shows up in `terraform plan` unless someone happens to apply against the same resource again. Most teams find out during an audit or after an incident.
+Terraform state describes what your infrastructure *should* look like. It does not verify your infrastructure still looks like that. A security group rule changed through the console, an S3 bucket with encryption disabled mid-incident, an RDS instance flipped to publicly accessible — none of it shows up in `terraform plan` unless someone re-applies against the same resource. Most teams find out during an audit, or after an incident.
 
-DriftGuard checks continuously instead.
-
-## What it does
-
-| Stage | Behavior |
-|---|---|
-| Parse | Reads `terraform.tfstate`, either uploaded directly or pulled from an S3 backend |
-| Collect | Queries live AWS state for the same resources via boto3 — EC2, S3, RDS, Security Groups, IAM |
-| Diff | Compares every tracked attribute, flags additions, deletions, and modifications |
-| Score | Maps each discrepancy to CIS AWS Benchmark controls and MITRE ATT&CK techniques, assigns severity |
-| Price | Calculates monthly cost delta for resources where drift changes billing (instance resizing, NAT gateways) |
-| Patch | Generates the Terraform HCL block needed to restore declared state |
-
-## What it does not do
-
-- It does not modify your infrastructure. It reads AWS state and reads Terraform state. Nothing is written to either.
-- It does not auto-apply patches. The generated HCL is output for review, not executed.
-- It does not support multi-cloud yet. AWS only. Azure and GCP collectors are not built.
-- It is not a replacement for `terraform plan`. Plan tells you what *will* change. DriftGuard tells you what already changed outside your control.
+DriftGuard checks continuously instead, and turns every finding into a reviewable PR.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    subgraph Sources["State sources"]
+        TF["terraform.tfstate\n(uploaded or S3 backend)"]
+        AWS["Live AWS API\n(via STS AssumeRole)"]
+    end
+
+    subgraph Engine["Drift Engine"]
+        Parser["TerraformStateParser"]
+        Collector["AWSStateCollector"]
+        Analyzer["DriftAnalyzer\n→ CIS + MITRE ATT&CK mapping"]
+        Scorer["PostureScorer\n→ 0-100"]
+        PatchGen["Patch generator\n→ HCL"]
+    end
+
+    subgraph Outputs["Outputs"]
+        DB[("PostgreSQL\nDriftFinding")]
+        GH["GitHub App\n→ PR to driftguard-remediations/"]
+    end
+
+    subgraph Clients["Access"]
+        API["FastAPI (async, API-key auth)"]
+        CLI["driftguard-cli"]
+        VSC["VS Code extension"]
+    end
+
+    TF --> Parser
+    AWS --> Collector
+    Parser --> Analyzer
+    Collector --> Analyzer
+    Analyzer --> Scorer
+    Analyzer --> PatchGen
+    Scorer --> DB
+    PatchGen --> DB
+    DB --> GH
+    API --> DB
+    CLI --> API
+    VSC --> API
 ```
-terraform.tfstate ──┐
-                     ├──▶ DriftAnalyzer ──▶ DriftResult[] ──▶ PostureScorer ──▶ score (0-100)
-Live AWS API ────────┘         │
-                                ▼
-                       Terraform HCL patch
-                                │
-                                ▼
-                    Persisted to PostgreSQL (DriftFinding)
-```
 
-The API is stateless per request. Scans run as FastAPI background tasks, writing results to PostgreSQL in a separate transaction from the request that triggered them — this matters because background tasks open their own DB session and will not see uncommitted data from the request session.
+Scans run as FastAPI background tasks in their own DB transaction — this matters: a background task opens its own session and will not see uncommitted data from the request that triggered it, so the request path commits explicitly before dispatch (see `backend/api/main.py`).
 
-## Stack
+## Security model
 
-- **API**: FastAPI, async throughout
-- **DB**: SQLAlchemy 2.0 async ORM, PostgreSQL in production, SQLite for local dev/CI
-- **Auth**: API keys, SHA-256 hashed at rest, never stored or logged in plaintext
-- **AWS access**: boto3, either via passed credentials per-scan or an assumed IAM role
-- **Rate limiting**: slowapi, per-route limits tuned to endpoint cost
-- **Testing**: pytest, 21 unit tests on the drift engine plus integration tests against `moto`-mocked AWS
+Two credential problems come up in any tool that touches a customer's AWS account and GitHub repo. Both are handled the same way — short-lived, scoped, per-tenant identity, never a static secret with broad access:
+
+| | Naive approach (rejected) | What DriftGuard does |
+|---|---|---|
+| **AWS access** | Accept `aws_access_key_id`/`secret` over HTTP | [STS AssumeRole](backend/integrations/aws_auth.py) with a per-workspace external ID (confused-deputy guarded — DriftGuard actively probes that a role rejects the wrong external ID before trusting it) |
+| **GitHub access** | One static PAT with access to every customer's repo | [GitHub App installation tokens](backend/integrations/github_pr.py) — JWT-signed, scoped only to repos that installed the app, expire in ~1 hour |
+
+Self-hosted single-account deployments can skip the AssumeRole flow entirely — DriftGuard falls back to the ambient credential chain (an IAM role already attached to wherever it's running).
+
+## What it does not do
+
+- Does not modify your infrastructure directly. It reads AWS state and Terraform state; nothing is written to either.
+- Does not auto-apply patches or splice them into your existing `.tf` files — that's an HCL-aware-parsing problem, and getting it wrong silently corrupts real infrastructure code. Patches land as new files under `driftguard-remediations/` in a PR, for human review.
+- Does not support multi-cloud yet. AWS only — Azure and GCP collectors aren't built.
+- Is not a replacement for `terraform plan`. Plan tells you what *will* change. DriftGuard tells you what already changed outside your control.
 
 ## Resource coverage
 
@@ -61,65 +90,70 @@ The API is stateless per request. Scans run as FastAPI background tasks, writing
 | `aws_iam_role` | assume_role_policy |
 | `aws_iam_policy` | policy document |
 
-Anything outside this list is not yet collected. Extending coverage means adding a method to `AWSStateCollector` and a rule entry to `SECURITY_RULES` in `backend/engines/drift.py`.
+Extending coverage means adding a method to `AWSStateCollector` and a rule entry to `SECURITY_RULES` in `backend/engines/drift.py`.
 
-## Running it
+## Quick start
 
-### Local, no AWS account needed
+### Run the engine locally — no AWS account needed
 
 ```bash
 git clone https://github.com/EdwinJdevops/driftguard.git
 cd driftguard
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 pytest backend/tests/ -v
 ```
 
-This runs the full drift engine test suite against synthetic state — no AWS credentials required, nothing leaves your machine.
+45 tests, synthetic state and `moto`-mocked AWS/STS — nothing leaves your machine, no credentials required.
 
-### Full stack
+### Full API + dashboard
 
 ```bash
 pip install -r requirements.txt
 uvicorn backend.api.main:app --reload
 ```
 
-API at `http://localhost:8000`, interactive docs at `/docs`. Defaults to SQLite if `DATABASE_URL` is unset.
+API at `http://localhost:8000`, interactive docs at `/docs`. Defaults to SQLite if `DATABASE_URL` is unset — fine for testing, not for a deployed instance (most free hosts wipe the filesystem on restart). Use Postgres in production.
 
 ```bash
 python3 -m http.server 3000 --directory frontend
 ```
 
-Dashboard at `http://localhost:3000`. First load prompts account creation — this issues an API key shown exactly once.
-
-### Production database
-
-SQLite is fine for testing the engine. It is not fine for a deployed instance — Render and most free-tier hosts wipe the filesystem on restart, which means every scan result disappears. Use Postgres:
+### CLI
 
 ```bash
-# Neon (free tier, no expiry, unlike Render's 90-day free Postgres)
-DATABASE_URL=postgresql+asyncpg://user:pass@host/driftguard
+pip install -e ./cli   # not yet on PyPI
+driftguard signup --org-name "Acme" --org-slug acme
+driftguard workspace create prod --region us-east-1
+driftguard scan trigger <workspace-id> --wait
 ```
+
+Full command reference: [cli/README.md](cli/README.md).
+
+### VS Code extension
+
+Findings sidebar, one-click scan triggers, jump straight to a remediation PR. Built and type-checked; not yet published to the Marketplace. Package it locally:
+
+```bash
+cd vscode-extension
+npm install && npx @vscode/vsce package
+# Install the resulting .vsix via "Extensions: Install from VSIX..." in VS Code
+```
+
+Details: [vscode-extension/README.md](vscode-extension/README.md).
 
 ## API
 
 Every authenticated route expects `Authorization: Bearer dg_live_...`.
 
 ```bash
-# Create an organization, get an API key (shown once)
-curl -X POST $API/signup \
-  -d '{"org_name": "Acme", "org_slug": "acme"}'
+curl -X POST $API/signup -d '{"org_name": "Acme", "org_slug": "acme"}'
 
-# Create a workspace
-curl -X POST $API/workspaces \
-  -H "Authorization: Bearer $KEY" \
+curl -X POST $API/workspaces -H "Authorization: Bearer $KEY" \
   -d '{"name": "production", "region": "us-east-1"}'
 
-# Trigger a scan
-curl -X POST $API/workspaces/$WS_ID/scan \
-  -H "Authorization: Bearer $KEY" \
+curl -X POST $API/workspaces/$WS_ID/scan -H "Authorization: Bearer $KEY" \
   -d @terraform.tfstate
 
-# Poll for results
 curl $API/scans/$SCAN_ID -H "Authorization: Bearer $KEY"
 ```
 
@@ -127,20 +161,26 @@ Full schema at `/docs`.
 
 ## Known limitations
 
-- No GitHub App integration yet — auto-PR creation is built (`backend/integrations/github.py`) but not wired into the scan pipeline. Currently a manual call.
-- Scheduled scanning (`scan_interval_minutes` on a workspace) is stored but not enforced. Celery Beat task exists, dispatch logic does not.
-- No multi-tenant resource isolation testing under load. Built for correctness, not yet load-tested.
-- IAM least-privilege policy for the scanning role is not published. Until it is, scope credentials manually to read-only access on EC2, S3, RDS, IAM describe actions.
+Stated plainly, not buried:
+
+- **Scheduling isn't enforced.** `scan_interval_minutes` is stored on a workspace but nothing dispatches on it — scans are triggered manually or via API/CLI/extension today. Celery is a listed dependency with an empty `workers/` package; wiring it up is the next real gap, not a hidden one.
+- **Cross-account AssumeRole flow is built and unit-tested, not live-validated** — it needs a real AWS account acting as the trusted principal, which isn't provisioned yet. Self-hosted single-account mode (ambient credentials) is the supported path today.
+- **No Alembic migrations.** `init_db()` runs `Base.metadata.create_all`. Fine pre-launch; a real gap once there's production data to migrate around.
+- **No multi-tenant load testing.** Built for correctness, not yet load-tested under concurrent orgs/workspaces.
+- **`ruff` doesn't gate the build** — CI runs it with `--exit-zero`, so lint failures are visible but don't fail the pipeline.
 
 ## Testing
 
 ```bash
-pytest backend/tests/ -v
+pytest backend/tests/ -v    # 45 tests: drift engine, AWS auth (STS + confused-deputy), GitHub PR automation
+cd cli && pytest tests/ -v  # CLI client tests
 ```
 
-21 tests covering: state parsing, drift detection (modified/added/deleted resources), severity scoring, CIS compliance mapping, cost delta calculation, Terraform patch generation, posture scoring, and fingerprint determinism.
+GitHub PR automation tests use `httpx.MockTransport` — real request routing and serialization, only the socket is faked, so a wrong URL or method fails the test rather than being silently accepted. AWS auth tests mix `moto` (mechanics) with direct `ClientError` mocking for the confused-deputy check specifically, because `moto` doesn't enforce IAM trust-policy conditions and would otherwise give false confidence.
 
-Integration tests use `moto` to mock AWS responses — they exercise the full pipeline including a real RDS instance flipped to public, verified against the actual severity and compliance output, not assumed.
+## Contributing
+
+Issues and PRs welcome. If you're adding resource coverage, a new `AWSStateCollector` method plus a `SECURITY_RULES` entry and matching test in `backend/tests/test_drift_engine.py` is the expected shape of the change.
 
 ## License
 
