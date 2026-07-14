@@ -1,0 +1,90 @@
+{
+  "name": "driftguard-vscode",
+  "displayName": "DriftGuard",
+  "description": "Terraform drift detection and remediation, inline in your editor.",
+  "version": "0.1.0",
+  "publisher": "EdwinJdevops",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EdwinJdevops/driftguard"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onView:driftguardFindings"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "driftguard",
+          "title": "DriftGuard",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "driftguard": [
+        {
+          "id": "driftguardFindings",
+          "name": "Open Findings"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "driftguard.configure",
+        "title": "DriftGuard: Configure API Connection"
+      },
+      {
+        "command": "driftguard.refreshFindings",
+        "title": "DriftGuard: Refresh Findings",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "driftguard.triggerScan",
+        "title": "DriftGuard: Trigger Scan"
+      },
+      {
+        "command": "driftguard.openPullRequest",
+        "title": "DriftGuard: Open Remediation PR"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "driftguard.refreshFindings",
+          "when": "view == driftguardFindings",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DriftGuard",
+      "properties": {
+        "driftguard.apiUrl": {
+          "type": "string",
+          "default": "https://driftguard-endm.onrender.com",
+          "description": "Base URL of your DriftGuard API instance."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "axios": "^1.7.0"
+  }
+}
