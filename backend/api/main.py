@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-import boto3
 import structlog
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,10 +31,15 @@ from ..models.models import (
 )
 from ..engines.drift import TerraformStateParser, AWSStateCollector, DriftAnalyzer, PostureScorer
 from ..integrations.s3_state import S3StateReader
+from ..integrations.aws_auth import generate_external_id, resolve_scan_session, check_role_misconfigured
+from ..integrations.github_pr import open_remediation_pr
 
 log = structlog.get_logger(__name__)
 
 limiter = Limiter(key_func=get_remote_address)
+
+GITHUB_APP_ID = os.getenv("GITHUB_APP_ID")
+GITHUB_APP_PRIVATE_KEY = os.getenv("GITHUB_APP_PRIVATE_KEY")
 
 
 # ── SCHEMAS ──────────────────────────────────────────────────────────────
@@ -62,15 +66,35 @@ class WorkspaceCreate(BaseModel):
     s3_region: str | None = None
     github_repo: str | None = None
     github_branch: str = "main"
+    github_app_installation_id: str | None = Field(
+        default=None,
+        description="GitHub App installation ID covering github_repo. Required for PR automation.",
+    )
     scan_interval_minutes: int = Field(default=60, ge=5, le=1440)
     auto_pr_enabled: bool = True
+    aws_role_arn: str | None = Field(
+        default=None,
+        description=(
+            "IAM role ARN in the target AWS account for DriftGuard to assume "
+            "via STS. Omit for self-hosted single-account deployments where "
+            "DriftGuard already runs with an IAM role scoped to this account."
+        ),
+    )
+
+
+class WorkspaceCreateResponse(BaseModel):
+    id: str
+    name: str
+    provider: str
+    region: str
+    state_backend: str
+    created_at: str
+    aws_external_id: str | None = None
+    trust_policy_setup: dict | None = None
 
 
 class ScanTriggerRequest(BaseModel):
     state_file_content: dict | None = None
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
-    aws_session_token: str | None = None
 
 
 # ── APP FACTORY ──────────────────────────────────────────────────────────
@@ -156,6 +180,8 @@ def register_routes(app: FastAPI):
                 detail=f"Workspace limit reached ({org.max_workspaces}). Upgrade plan to add more.",
             )
 
+        external_id = generate_external_id() if body.aws_role_arn else None
+
         ws = Workspace(
             org_id=org.id,
             name=body.name,
@@ -168,16 +194,99 @@ def register_routes(app: FastAPI):
             s3_region=body.s3_region or body.region,
             github_repo=body.github_repo,
             github_branch=body.github_branch,
+            github_app_installation_id=body.github_app_installation_id,
             scan_interval_minutes=body.scan_interval_minutes,
             auto_pr_enabled=body.auto_pr_enabled,
+            aws_role_arn=body.aws_role_arn,
+            aws_external_id=external_id,
         )
         db.add(ws)
         await db.flush()
 
+        trust_policy_setup = None
+        if body.aws_role_arn:
+            trust_policy_setup = {
+                "instructions": (
+                    "Add this trust policy to the IAM role so DriftGuard can "
+                    "assume it. The external_id is required."
+                ),
+                "trust_policy": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {"AWS": os.getenv("DRIFTGUARD_AWS_ACCOUNT_ID", "<driftguard-account-id>")},
+                            "Action": "sts:AssumeRole",
+                            "Condition": {"StringEquals": {"sts:ExternalId": external_id}},
+                        }
+                    ],
+                },
+            }
+
+        return WorkspaceCreateResponse(
+            id=ws.id, name=ws.name, provider=ws.provider.value,
+            region=ws.region, state_backend=ws.state_backend.value,
+            created_at=ws.created_at.isoformat(),
+            aws_external_id=external_id,
+            trust_policy_setup=trust_policy_setup,
+        )
+
+    @app.post("/workspaces/{workspace_id}/verify-role")
+    @limiter.limit("20/minute")
+    async def verify_role(
+        request: Request,
+        workspace_id: str,
+        org: Organization = Depends(verify_api_key),
+        db: AsyncSession = Depends(get_db),
+    ):
+        """
+        Called after the customer has created the IAM role in AWS. Confirms:
+          1. The role is actually assumable with the correct external ID.
+          2. The trust policy enforces the external ID condition — i.e. it
+             does NOT also accept a wrong/blank external ID.
+        A workspace with a role_arn is not usable for scanning until this
+        passes; failing closed here is deliberate — an unverified role could
+        mean either a broken setup (scans fail) or a misconfigured trust
+        policy open to any AWS account (a real, exploitable hole).
+        """
+        ws_result = await db.execute(
+            select(Workspace).where(Workspace.id == workspace_id, Workspace.org_id == org.id)
+        )
+        workspace = ws_result.scalar_one_or_none()
+        if not workspace:
+            raise HTTPException(status_code=404, detail="Workspace not found.")
+        if not workspace.aws_role_arn or not workspace.aws_external_id:
+            raise HTTPException(status_code=400, detail="Workspace has no aws_role_arn configured.")
+
+        assume_result = resolve_scan_session(workspace.aws_role_arn, workspace.aws_external_id, workspace.region)
+        if not assume_result.success:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Role is not assumable with the configured external ID: {assume_result.error}",
+            )
+
+        try:
+            is_misconfigured = check_role_misconfigured(workspace.aws_role_arn, workspace.region)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not verify trust policy safety: {e}",
+            )
+
+        if is_misconfigured:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Role is assumable WITHOUT the correct external ID — the trust policy "
+                    "does not enforce sts:ExternalId. This role is exploitable by any AWS "
+                    "account that guesses the ARN. Fix the trust policy Condition block before retrying."
+                ),
+            )
+
         return {
-            "id": ws.id, "name": ws.name, "provider": ws.provider.value,
-            "region": ws.region, "state_backend": ws.state_backend.value,
-            "created_at": ws.created_at.isoformat(),
+            "workspace_id": workspace.id,
+            "verified": True,
+            "expiration": assume_result.expiration,
         }
 
     @app.get("/workspaces")
@@ -229,14 +338,6 @@ def register_routes(app: FastAPI):
         # timing relative to background task execution is not guaranteed.
         await db.commit()
 
-        aws_creds = None
-        if body.aws_access_key_id:
-            aws_creds = {
-                "aws_access_key_id": body.aws_access_key_id,
-                "aws_secret_access_key": body.aws_secret_access_key,
-                "aws_session_token": body.aws_session_token,
-            }
-
         background_tasks.add_task(
             run_scan_pipeline,
             workspace_id=workspace.id,
@@ -247,7 +348,8 @@ def register_routes(app: FastAPI):
             s3_key=workspace.s3_key,
             s3_region=workspace.s3_region,
             region=workspace.region,
-            aws_creds=aws_creds,
+            aws_role_arn=workspace.aws_role_arn,
+            aws_external_id=workspace.aws_external_id,
         )
 
         return {"scan_id": scan_id, "workspace_id": workspace.id, "status": "pending"}
@@ -283,6 +385,9 @@ def register_routes(app: FastAPI):
                     "compliance_violations": f.compliance_violations,
                     "cost_delta_monthly": f.cost_delta_monthly,
                     "terraform_patch": f.terraform_patch,
+                    "status": f.status.value,
+                    "github_pr_url": f.github_pr_url,
+                    "github_pr_number": f.github_pr_number,
                 }
                 for f in findings
             ],
@@ -318,6 +423,8 @@ def register_routes(app: FastAPI):
                     "id": f.id, "resource_type": f.resource_type, "resource_id": f.resource_id,
                     "severity": f.severity.value, "drift_type": f.drift_type,
                     "cost_delta_monthly": f.cost_delta_monthly,
+                    "github_pr_url": f.github_pr_url,
+                    "github_pr_number": f.github_pr_number,
                 }
                 for f in findings
             ],
@@ -347,7 +454,8 @@ async def run_scan_pipeline(
     s3_key: str | None,
     s3_region: str | None,
     region: str,
-    aws_creds: dict | None,
+    aws_role_arn: str | None,
+    aws_external_id: str | None,
 ):
     """Background task: full scan pipeline with DB persistence."""
     log.info("Starting scan pipeline", scan_id=scan_id, workspace_id=workspace_id)
@@ -364,8 +472,10 @@ async def run_scan_pipeline(
         await db.flush()
 
         try:
-            session_kwargs = {k: v for k, v in (aws_creds or {}).items() if v}
-            session = boto3.Session(**session_kwargs)
+            auth_result = resolve_scan_session(aws_role_arn, aws_external_id, region)
+            if not auth_result.success:
+                raise RuntimeError(f"AWS authentication failed: {auth_result.error}")
+            session = auth_result.session
 
             if state_backend == StateBackend.S3 and s3_bucket and s3_key:
                 reader = S3StateReader(session)
@@ -391,6 +501,7 @@ async def run_scan_pipeline(
             scorer = PostureScorer()
             score = scorer.score(findings, max(total_live, len(tf_resources), 1))
 
+            db_findings = []
             for f in findings:
                 db_finding = DriftFinding(
                     workspace_id=workspace_id,
@@ -410,6 +521,7 @@ async def run_scan_pipeline(
                     terraform_patch=f.terraform_patch,
                 )
                 db.add(db_finding)
+                db_findings.append(db_finding)
 
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = datetime.now(timezone.utc)
@@ -423,7 +535,42 @@ async def run_scan_pipeline(
             if workspace:
                 workspace.last_scanned_at = datetime.now(timezone.utc)
 
-            await db.flush()
+            await db.flush()  # populate generated finding IDs before PR automation
+
+            if (
+                workspace
+                and workspace.auto_pr_enabled
+                and workspace.github_repo
+                and workspace.github_app_installation_id
+                and GITHUB_APP_ID
+                and GITHUB_APP_PRIVATE_KEY
+            ):
+                owner, _, repo_name = workspace.github_repo.partition("/")
+                for db_finding in db_findings:
+                    if not db_finding.terraform_patch:
+                        continue
+                    pr_result = await open_remediation_pr(
+                        app_id=GITHUB_APP_ID,
+                        private_key_pem=GITHUB_APP_PRIVATE_KEY,
+                        installation_id=workspace.github_app_installation_id,
+                        owner=owner,
+                        repo=repo_name,
+                        base_branch=workspace.github_branch,
+                        terraform_dir=workspace.terraform_dir,
+                        finding=db_finding,
+                    )
+                    if pr_result.success:
+                        db_finding.github_pr_url = pr_result.pr_url
+                        db_finding.github_pr_number = pr_result.pr_number
+                        db_finding.status = DriftStatus.PR_OPENED
+                    else:
+                        log.error(
+                            "GitHub PR automation failed for finding",
+                            finding_id=db_finding.id,
+                            error=pr_result.error,
+                        )
+                await db.flush()
+
             log.info("Scan completed", scan_id=scan_id, findings=len(findings), score=score)
 
         except Exception as e:

@@ -105,9 +105,20 @@ class Workspace(Base, TimestampMixin):
     github_repo: Mapped[str | None] = mapped_column(String(500))
     github_branch: Mapped[str] = mapped_column(String(255), default="main")
     terraform_dir: Mapped[str] = mapped_column(String(500), default=".")
+    # ID of the GitHub App installation covering github_repo. A GitHub App
+    # installation token is scoped only to repos that installation covers —
+    # this is what makes per-tenant isolation possible instead of one PAT
+    # with access to every customer's repo.
+    github_app_installation_id: Mapped[str | None] = mapped_column(String(100))
 
-    # Credentials reference — never store raw AWS keys; reference a Secrets Manager ARN
-    credentials_secret_arn: Mapped[str | None] = mapped_column(String(500))
+    # Cross-account access via STS AssumeRole — DriftGuard never stores or
+    # receives raw AWS access keys. The customer creates an IAM role in
+    # their account trusting DriftGuard's account, gated by external_id.
+    # If aws_role_arn is null, the scan falls back to the ambient credential
+    # chain (single-account self-hosted deployments running inside the
+    # target account already).
+    aws_role_arn: Mapped[str | None] = mapped_column(String(500))
+    aws_external_id: Mapped[str | None] = mapped_column(String(255))
 
     scan_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
     auto_pr_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
