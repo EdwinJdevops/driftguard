@@ -107,6 +107,20 @@ async def lifespan(app: FastAPI):
     log.info("DriftGuard API shutting down")
 
 
+def normalize_origin(origin: str) -> str:
+    """
+    Ensures a CORS origin entry has a scheme. A bare hostname (e.g. from
+    Render's RENDER_EXTERNAL_HOSTNAME env var) would never match a browser's
+    Origin header, which always includes a scheme — silently breaking CORS
+    with no error anywhere. Defaults to https, since that's what every real
+    deployment target uses.
+    """
+    origin = origin.strip()
+    if origin in ("*", "") or origin.startswith(("http://", "https://")):
+        return origin
+    return f"https://{origin}"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="DriftGuard",
@@ -120,7 +134,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+        allow_origins=[normalize_origin(o) for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
