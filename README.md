@@ -112,11 +112,26 @@ pip install -r requirements.txt
 uvicorn backend.api.main:app --reload
 ```
 
-API at `http://localhost:8000`, interactive docs at `/docs`. Defaults to SQLite if `DATABASE_URL` is unset — fine for testing, not for a deployed instance (most free hosts wipe the filesystem on restart). Use Postgres in production.
+API at `http://localhost:8000`, interactive docs at `/docs`. Defaults to SQLite if `DATABASE_URL` is unset — fine for testing, not for a deployed instance (most free hosts wipe the filesystem on restart). Use Postgres in production (Render's free tier expires after 90 days; Neon has no expiry on its free tier).
 
 ```bash
-python3 -m http.server 3000 --directory frontend
+cd frontend
+npm install
+npm run dev   # http://localhost:5173, proxies to the API via VITE_API_URL
 ```
+
+Real React app (Vite + TS + Tailwind v4) — landing page plus a dashboard wired to the live API (workspaces, scan trigger + poll, findings, posture score). Not mock data.
+
+### Deploy — Render
+
+```bash
+git push
+# In the Render dashboard: New > Blueprint, point at this repo, it reads render.yaml
+```
+
+`render.yaml` provisions both services plus a free Postgres instance, and wires `ALLOWED_ORIGINS` / `VITE_API_URL` between them automatically via `fromService` + `RENDER_EXTERNAL_HOSTNAME` (Render doesn't support variable interpolation in `render.yaml` directly, so the scheme is prepended via shell interpolation in the build/start commands — same pattern Render's own examples use). You'll be prompted for `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `DRIFTGUARD_AWS_ACCOUNT_ID` on first deploy (`sync: false` — secrets aren't stored in the Blueprint file).
+
+Validate the Blueprint before deploying, if you have the Render CLI: `render blueprints validate render.yaml`.
 
 ### CLI
 
@@ -167,14 +182,18 @@ Stated plainly, not buried:
 - **Cross-account AssumeRole flow is built and unit-tested, not live-validated** — it needs a real AWS account acting as the trusted principal, which isn't provisioned yet. Self-hosted single-account mode (ambient credentials) is the supported path today.
 - **No Alembic migrations.** `init_db()` runs `Base.metadata.create_all`. Fine pre-launch; a real gap once there's production data to migrate around.
 - **No multi-tenant load testing.** Built for correctness, not yet load-tested under concurrent orgs/workspaces.
-- **`ruff` doesn't gate the build** — CI runs it with `--exit-zero`, so lint failures are visible but don't fail the pipeline.
+- **Render's free Postgres tier expires after 90 days.** `render.yaml` provisions it because it's zero-friction for a first deploy — swap `DATABASE_URL` for Neon/Supabase before that matters.
 
 ## Testing
 
 ```bash
-pytest backend/tests/ -v    # 45 tests: drift engine, AWS auth (STS + confused-deputy), GitHub PR automation
-cd cli && pytest tests/ -v  # CLI client tests
+pytest backend/tests/ -v    # 50 tests: drift engine, AWS auth (STS + confused-deputy), GitHub PR automation, CORS
+cd cli && pytest tests/ -v  # 5 CLI client tests
+cd frontend && npx tsc -b && npm run build && npx oxlint  # type-check, build, lint
 ```
+
+CI gates on all of it — `ruff check backend/` (no `--exit-zero`), the full pytest suite, the CLI suite, and a VS Code extension `tsc` build. A red check actually blocks merge.
+
 
 GitHub PR automation tests use `httpx.MockTransport` — real request routing and serialization, only the socket is faked, so a wrong URL or method fails the test rather than being silently accepted. AWS auth tests mix `moto` (mechanics) with direct `ClientError` mocking for the confused-deputy check specifically, because `moto` doesn't enforce IAM trust-policy conditions and would otherwise give false confidence.
 

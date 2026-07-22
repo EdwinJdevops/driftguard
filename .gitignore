@@ -16,3 +16,6 @@ cli/build/
 
 # Node
 node_modules/
+
+# Frontend build output
+frontend/dist/
