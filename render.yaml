@@ -1,0 +1,75 @@
+####################################################################
+# DriftGuard — Render Blueprint
+#
+# Two services + one database:
+#   - driftguard-api: FastAPI backend (Python, free plan)
+#   - driftguard-frontend: static React build (free plan)
+#   - driftguard-db: Postgres (see note below on free-tier expiry)
+#
+# Cross-service URLs use fromService + envVarKey to pull each service's
+# RENDER_EXTERNAL_HOSTNAME (a bare hostname, no scheme — Render doesn't
+# support variable interpolation in envVars.value, so the scheme is
+# prepended via shell interpolation in buildCommand/startCommand, the
+# same pattern Render's own docs use). The backend also normalizes a
+# bare-hostname ALLOWED_ORIGINS defensively (see normalize_origin() in
+# backend/api/main.py) as a second layer, not a substitute for this.
+#
+# NOTE ON POSTGRES: Render's free Postgres instances expire after 90
+# days. For anything beyond initial testing, either upgrade the plan
+# below or point DATABASE_URL (sync: false) at Neon/Supabase instead —
+# backend/database.py already normalizes postgres:// and postgresql://
+# URLs to the asyncpg driver either way.
+####################################################################
+
+services:
+  - type: web
+    name: driftguard-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      ALLOWED_ORIGINS="https://${FRONTEND_HOST}"
+      uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: driftguard-db
+          property: connectionString
+      - key: FRONTEND_HOST
+        fromService:
+          name: driftguard-frontend
+          type: web
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: DRIFTGUARD_AWS_ACCOUNT_ID
+        sync: false
+
+  - type: web
+    name: driftguard-frontend
+    runtime: static
+    buildCommand: >-
+      VITE_API_URL="https://${BACKEND_HOST}"
+      npm --prefix frontend install && npm --prefix frontend run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: BACKEND_HOST
+        fromService:
+          name: driftguard-api
+          type: web
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+    routes:
+      # SPA fallback — client-side routing (usePath() in App.tsx) needs
+      # /dashboard to resolve to index.html, not a 404.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+databases:
+  - name: driftguard-db
+    plan: free
+    databaseName: driftguard
