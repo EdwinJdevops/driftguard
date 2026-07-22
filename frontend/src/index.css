@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --font-sans: "Inter", -apple-system, "Segoe UI", sans-serif;
+
+  --color-bg: #0B0F14;
+  --color-panel: #111820;
+  --color-panel-border: #1E2A38;
+  --color-panel-hover: #14202C;
+  --color-text: #E6EDF3;
+  --color-text-dim: #7B8794;
+
+  --color-brand: #58A6FF;
+  --color-drift: #F0883E;
+  --color-critical: #F85149;
+  --color-high: #F0883E;
+  --color-medium: #E3B341;
+  --color-low: #6E7681;
+  --color-good: #3FB950;
+}
+
+@layer base {
+  html {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-drift) 30%, transparent);
+    color: var(--color-text);
+  }
+
+  /* Visible keyboard focus everywhere — not stripped for aesthetics. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
