@@ -9,30 +9,45 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import structlog
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import init_db, get_db, db_session
-from ..core.auth import verify_api_key, generate_api_key
-from ..models.models import (
-    Organization, Workspace, DriftScan, DriftFinding, APIKey,
-    CloudProvider, ScanStatus, DriftStatus, SeverityLevel, StateBackend,
+from ..core.auth import generate_api_key, verify_api_key
+from ..database import db_session, get_db, init_db
+from ..engines.drift import (
+    AWSStateCollector,
+    DriftAnalyzer,
+    PostureScorer,
+    TerraformStateParser,
 )
-from ..engines.drift import TerraformStateParser, AWSStateCollector, DriftAnalyzer, PostureScorer
-from ..integrations.s3_state import S3StateReader
-from ..integrations.aws_auth import generate_external_id, resolve_scan_session, check_role_misconfigured
+from ..integrations.aws_auth import (
+    check_role_misconfigured,
+    generate_external_id,
+    resolve_scan_session,
+)
 from ..integrations.github_pr import open_remediation_pr
+from ..integrations.s3_state import S3StateReader
+from ..models.models import (
+    APIKey,
+    CloudProvider,
+    DriftFinding,
+    DriftScan,
+    DriftStatus,
+    Organization,
+    ScanStatus,
+    SeverityLevel,
+    StateBackend,
+    Workspace,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -148,7 +163,7 @@ def register_routes(app: FastAPI):
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "version": "2.0.0", "timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "ok", "version": "2.0.0", "timestamp": datetime.now(UTC).isoformat()}
 
     @app.get("/api")
     async def api_info():
@@ -445,18 +460,23 @@ def register_routes(app: FastAPI):
             "total": len(findings),
         }
 
-    # ── DASHBOARD (static files) ──────────────────────────────────────
-    # Mounted last and deliberately: Starlette matches explicit routes
-    # registered above (health, signup, workspaces, scans, findings, docs)
-    # before falling through to this mount. Any path not matched by an
-    # explicit route above is served from frontend/, with "/" resolving
-    # to index.html. This makes one deployment serve both the API and
-    # the dashboard — no separate frontend host required.
-    frontend_dir = Path(__file__).resolve().parent.parent.parent / "frontend"
-    if frontend_dir.exists():
-        app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="dashboard")
-    else:
-        log.warning("Frontend directory not found, dashboard will not be served", path=str(frontend_dir))
+    # ── ROOT ─────────────────────────────────────────────────────────
+    # No dashboard mount here. render.yaml deploys the frontend as its
+    # own separate static site service (driftguard-frontend) that runs
+    # a real `npm run build` — this API service never builds the
+    # frontend, so serving frontend/ raw from here would mean serving
+    # unbuilt Vite source (a shell index.html referencing /src/main.tsx,
+    # which a browser can't execute — that was the exact cause of a
+    # blank-white-page regression after the single-service architecture
+    # was split into two Render services). This is a pure API now.
+    @app.get("/")
+    async def root():
+        return {
+            "service": "driftguard-api",
+            "version": "2.0.0",
+            "docs": "/docs",
+            "health": "/health",
+        }
 
 
 async def run_scan_pipeline(
@@ -482,7 +502,7 @@ async def run_scan_pipeline(
             return
 
         scan.status = ScanStatus.RUNNING
-        scan.started_at = datetime.now(timezone.utc)
+        scan.started_at = datetime.now(UTC)
         await db.flush()
 
         try:
@@ -538,7 +558,7 @@ async def run_scan_pipeline(
                 db_findings.append(db_finding)
 
             scan.status = ScanStatus.COMPLETED
-            scan.completed_at = datetime.now(timezone.utc)
+            scan.completed_at = datetime.now(UTC)
             scan.total_resources_checked = total_live
             scan.drift_count = len(findings)
             scan.posture_score = score
@@ -547,7 +567,7 @@ async def run_scan_pipeline(
             ws_result = await db.execute(select(Workspace).where(Workspace.id == workspace_id))
             workspace = ws_result.scalar_one_or_none()
             if workspace:
-                workspace.last_scanned_at = datetime.now(timezone.utc)
+                workspace.last_scanned_at = datetime.now(UTC)
 
             await db.flush()  # populate generated finding IDs before PR automation
 
@@ -590,7 +610,7 @@ async def run_scan_pipeline(
         except Exception as e:
             scan.status = ScanStatus.FAILED
             scan.error_message = str(e)
-            scan.completed_at = datetime.now(timezone.utc)
+            scan.completed_at = datetime.now(UTC)
             await db.flush()
             log.error("Scan failed", scan_id=scan_id, error=str(e))
 
