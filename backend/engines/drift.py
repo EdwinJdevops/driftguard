@@ -8,11 +8,11 @@ cost delta, and a suggested Terraform patch for auto-PR creation.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, ClassVar
 
 import boto3
 import structlog
@@ -161,8 +161,8 @@ class AWSStateCollector:
                 try:
                     v = s3.get_bucket_versioning(Bucket=name)
                     data["versioning"] = v.get("Status", "Disabled")
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Could not read bucket versioning", bucket=name, error=str(e))
                 try:
                     enc = s3.get_bucket_encryption(Bucket=name)
                     data["server_side_encryption_configuration"] = enc.get("ServerSideEncryptionConfiguration")
@@ -175,8 +175,8 @@ class AWSStateCollector:
                         for g in acl.get("Grants", [])
                     )
                     data["acl"] = "public-read" if is_public else "private"
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug("Could not read bucket ACL", bucket=name, error=str(e))
                 resources[name] = data
         except Exception as e:
             log.error("Failed to collect S3 buckets", error=str(e))
@@ -229,7 +229,7 @@ class AWSStateCollector:
 class DriftAnalyzer:
     """Core drift analysis engine."""
 
-    SKIP_KEYS = {"arn", "id", "tags_all", "tags", "last_modified", "created_time"}
+    SKIP_KEYS: ClassVar[set[str]] = {"arn", "id", "tags_all", "tags", "last_modified", "created_time"}
 
     def analyze(
         self,
@@ -244,7 +244,7 @@ class DriftAnalyzer:
             for rid, attrs in instances.items():
                 live_flat[f"{rtype}/{rid}"] = {"type": rtype, "id": rid, "attrs": attrs}
 
-        for tf_key, tf_resource in tf_resources.items():
+        for tf_resource in tf_resources.values():
             rtype, rid, rname = tf_resource["type"], tf_resource["id"], tf_resource["name"]
             tf_attrs = tf_resource["attributes"]
             live_key = f"{rtype}/{rid}"
@@ -395,7 +395,7 @@ class DriftAnalyzer:
 class PostureScorer:
     """Calculates a 0-100 security posture score for the workspace."""
 
-    WEIGHTS = {
+    WEIGHTS: ClassVar[dict[Severity, float]] = {
         Severity.CRITICAL: 20.0, Severity.HIGH: 10.0,
         Severity.MEDIUM: 4.0, Severity.LOW: 1.0, Severity.INFO: 0.2,
     }

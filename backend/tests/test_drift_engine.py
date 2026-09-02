@@ -5,14 +5,14 @@ Run: pytest backend/tests/test_drift_engine.py -v
 """
 
 import pytest
-from backend.engines.drift import (
-    TerraformStateParser,
-    DriftAnalyzer,
-    PostureScorer,
-    DriftType,
-    Severity,
-)
 
+from backend.engines.drift import (
+    DriftAnalyzer,
+    DriftType,
+    PostureScorer,
+    Severity,
+    TerraformStateParser,
+)
 
 # ── FIXTURES ─────────────────────────────────────────────────────────────
 

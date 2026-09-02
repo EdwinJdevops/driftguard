@@ -4,9 +4,10 @@ DriftGuard — Cross-Account Auth Test Suite
 Run: pytest backend/tests/test_aws_auth.py -v
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.integrations.aws_auth import (
@@ -159,9 +160,8 @@ def test_check_role_misconfigured_reraises_non_access_denied_errors():
     mock_client = MagicMock()
     mock_client.assume_role.side_effect = _client_error("ValidationError")
 
-    with patch("backend.integrations.aws_auth.boto3.client", return_value=mock_client):
-        with pytest.raises(Exception):
-            check_role_misconfigured(TEST_ROLE_ARN, "us-east-1")
+    with patch("backend.integrations.aws_auth.boto3.client", return_value=mock_client), pytest.raises(ClientError):
+        check_role_misconfigured(TEST_ROLE_ARN, "us-east-1")
 
 
 def _client_error(code: str):

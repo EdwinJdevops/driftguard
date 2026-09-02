@@ -16,8 +16,8 @@ Local dev / CI: falls back to SQLite if DATABASE_URL is unset.
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,

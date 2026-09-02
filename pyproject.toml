@@ -1,0 +1,18 @@
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = [
+    # B008: Depends(...) as an argument default is FastAPI's mandatory,
+    # documented dependency-injection pattern — not a real mutable-default
+    # bug. Flagging every route handler in the codebase is a framework
+    # false positive, not a finding.
+    "B008",
+    # BLE001: every instance of `except Exception` in this codebase is at
+    # an external-integration boundary (AWS, GitHub, the scan pipeline) —
+    # broad-catch-log-mark-failed is deliberate fault isolation so one
+    # provider's failure mode can't crash the process. Narrower catches
+    # are still expected and used everywhere else; this rule would
+    # otherwise force weakening that isolation for no benefit.
+    "BLE001",
+]

@@ -203,11 +203,13 @@ def _pr_body(finding) -> str:
     lines += [
         "",
         "---",
-        "This PR adds the suggested Terraform patch as a new file under "
-        "`driftguard-remediations/` for review. DriftGuard does not modify "
-        "your existing `.tf` files automatically — merge this manually into "
-        "the correct location after review, or close this PR if the drift "
-        "was intentional.",
+        (
+            "This PR adds the suggested Terraform patch as a new file under "
+            "`driftguard-remediations/` for review. DriftGuard does not modify "
+            "your existing `.tf` files automatically — merge this manually into "
+            "the correct location after review, or close this PR if the drift "
+            "was intentional."
+        ),
     ]
     return "\n".join(lines)
 

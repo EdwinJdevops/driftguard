@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import APIKeyHeader
@@ -79,7 +79,7 @@ async def verify_api_key(
             detail="Invalid or revoked API key.",
         )
 
-    if api_key.expires_at and api_key.expires_at < datetime.now(timezone.utc):
+    if api_key.expires_at and api_key.expires_at < datetime.now(UTC):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="API key has expired.",
@@ -97,7 +97,7 @@ async def verify_api_key(
     await db.execute(
         update(APIKey)
         .where(APIKey.id == api_key.id)
-        .values(last_used_at=datetime.now(timezone.utc))
+        .values(last_used_at=datetime.now(UTC))
     )
     await db.commit()
 

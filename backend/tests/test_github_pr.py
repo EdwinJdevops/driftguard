@@ -9,13 +9,14 @@ Run: pytest backend/tests/test_github_pr.py -v
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from jose import jwt as jose_jwt
+from jose.exceptions import JWTError
 
 from backend.integrations.github_pr import (
     GitHubPRClient,
@@ -59,7 +60,7 @@ def test_generate_app_jwt_has_correct_claims(rsa_private_key_pem):
 
     assert claims["iss"] == "123456"
     assert claims["exp"] - claims["iat"] <= 600  # GitHub's hard max lifetime
-    assert claims["iat"] < int(datetime.now(timezone.utc).timestamp())  # backdated for clock drift
+    assert claims["iat"] < int(datetime.now(UTC).timestamp())  # backdated for clock drift
 
 
 def test_generate_app_jwt_is_valid_rs256_signature(rsa_private_key_pem):
@@ -71,7 +72,7 @@ def test_generate_app_jwt_is_valid_rs256_signature(rsa_private_key_pem):
 
     # Sign with a *different* key than we verify against — must fail.
     token = generate_app_jwt("123456", rsa_private_key_pem)
-    with pytest.raises(Exception):
+    with pytest.raises(JWTError):
         jose_jwt.decode(token, public_key, algorithms=["RS256"])
 
 

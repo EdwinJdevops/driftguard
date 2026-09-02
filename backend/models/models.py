@@ -1,9 +1,13 @@
 from __future__ import annotations
-from sqlalchemy import String, Text, Boolean, Integer, Float, JSON, ForeignKey, Enum as SAEnum, DateTime
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from datetime import datetime
-from .base import Base, TimestampMixin, generate_id
+
 import enum
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .base import Base, TimestampMixin, generate_id
 
 
 class PlanTier(str, enum.Enum):
@@ -61,8 +65,8 @@ class Organization(Base, TimestampMixin):
     max_workspaces: Mapped[int] = mapped_column(Integer, default=1)
     max_resources: Mapped[int] = mapped_column(Integer, default=50)
 
-    workspaces: Mapped[list["Workspace"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
-    api_keys: Mapped[list["APIKey"]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    workspaces: Mapped[list[Workspace]] = relationship(back_populates="organization", cascade="all, delete-orphan")
+    api_keys: Mapped[list[APIKey]] = relationship(back_populates="organization", cascade="all, delete-orphan")
 
 
 class APIKey(Base, TimestampMixin):
@@ -129,8 +133,8 @@ class Workspace(Base, TimestampMixin):
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     organization: Mapped[Organization] = relationship(back_populates="workspaces")
-    scans: Mapped[list["DriftScan"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
-    findings: Mapped[list["DriftFinding"]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    scans: Mapped[list[DriftScan]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    findings: Mapped[list[DriftFinding]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
 
 
 class DriftScan(Base, TimestampMixin):
@@ -152,7 +156,7 @@ class DriftScan(Base, TimestampMixin):
     error_message: Mapped[str | None] = mapped_column(Text)
 
     workspace: Mapped[Workspace] = relationship(back_populates="scans")
-    findings: Mapped[list["DriftFinding"]] = relationship(back_populates="scan", cascade="all, delete-orphan")
+    findings: Mapped[list[DriftFinding]] = relationship(back_populates="scan", cascade="all, delete-orphan")
 
 
 class DriftFinding(Base, TimestampMixin):
