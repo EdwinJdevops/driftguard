@@ -11,6 +11,8 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from backend.integrations.aws_auth import (
+    ASSUME_ROLE_DURATION_SECONDS,
+    ASSUME_ROLE_SESSION_NAME,
     assume_workspace_role,
     check_role_misconfigured,
     generate_external_id,
@@ -127,7 +129,7 @@ def test_resolve_scan_session_ambient_chain_succeeds_when_credentials_present(mo
 # both real AWS behaviors are exercised deliberately.
 
 def test_check_role_misconfigured_returns_false_when_access_denied():
-    """AWS correctly rejecting a wrong external ID = properly configured role."""
+    """Rejecting the otherwise-equivalent wrong-ExternalId probe is the required negative control."""
     mock_client = MagicMock()
     mock_client.assume_role.side_effect = _client_error("AccessDenied")
 
@@ -135,6 +137,11 @@ def test_check_role_misconfigured_returns_false_when_access_denied():
         result = check_role_misconfigured(TEST_ROLE_ARN, "us-east-1")
 
     assert result is False
+    call = mock_client.assume_role.call_args.kwargs
+    assert call["RoleArn"] == TEST_ROLE_ARN
+    assert call["RoleSessionName"] == ASSUME_ROLE_SESSION_NAME
+    assert call["DurationSeconds"] == ASSUME_ROLE_DURATION_SECONDS
+    assert call["ExternalId"].startswith("probe-")
 
 
 def test_check_role_misconfigured_returns_true_when_assume_unexpectedly_succeeds():
@@ -153,6 +160,9 @@ def test_check_role_misconfigured_returns_true_when_assume_unexpectedly_succeeds
         result = check_role_misconfigured(TEST_ROLE_ARN, "us-east-1")
 
     assert result is True
+    call = mock_client.assume_role.call_args.kwargs
+    assert call["RoleSessionName"] == ASSUME_ROLE_SESSION_NAME
+    assert call["DurationSeconds"] == ASSUME_ROLE_DURATION_SECONDS
 
 
 def test_check_role_misconfigured_reraises_non_access_denied_errors():
@@ -165,8 +175,6 @@ def test_check_role_misconfigured_reraises_non_access_denied_errors():
 
 
 def _client_error(code: str):
-    from botocore.exceptions import ClientError
-
     return ClientError(
         error_response={"Error": {"Code": code, "Message": f"Simulated {code}"}},
         operation_name="AssumeRole",

@@ -28,7 +28,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ./cli
-      - run: pip install pytest ruff
+      - run: pip install pytest==9.1.1 ruff==0.16.5
       - run: ruff check cli/driftguard_cli/ cli/tests/
       - run: pytest cli/tests/ -v --tb=short
 
