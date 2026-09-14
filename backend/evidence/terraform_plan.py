@@ -85,11 +85,13 @@ def analyze_plan_json(
         provider_name = _optional_string(raw, "provider_name", position)
 
         resource_index = raw.get("index")
-        if resource_index is not None:
-            if isinstance(resource_index, bool) or not isinstance(resource_index, (str, int)):
-                raise PlanEvidenceError(
-                    f"resource_drift[{position}].index must be a string or integer when present."
-                )
+        if resource_index is not None and (
+            isinstance(resource_index, bool)
+            or not isinstance(resource_index, (str, int))
+        ):
+            raise PlanEvidenceError(
+                f"resource_drift[{position}].index must be a string or integer when present."
+            )
 
         change = raw.get("change")
         if not isinstance(change, Mapping):
