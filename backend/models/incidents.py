@@ -72,7 +72,7 @@ class FindingIncident(Base, TimestampMixin):
 
 
 class FindingOccurrence(Base, TimestampMixin):
-    """Redacted audit record that an incident was observed in a specific scan."""
+    """Redacted audit row for an incident in a lifecycle-applied scan."""
 
     __tablename__ = "finding_occurrences"
     __table_args__ = (
@@ -99,6 +99,22 @@ class FindingOccurrence(Base, TimestampMixin):
     unknown_paths: Mapped[list[str]] = mapped_column(JSON, nullable=False)
 
 
+class EvidenceCursor(Base, TimestampMixin):
+    """Monotonic lifecycle watermark for one workspace."""
+
+    __tablename__ = "evidence_cursors"
+
+    workspace_id: Mapped[str] = mapped_column(
+        ForeignKey("workspaces.id"), primary_key=True
+    )
+    latest_observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    latest_scan_id: Mapped[str] = mapped_column(
+        ForeignKey("drift_scans.id"), nullable=False
+    )
+
+
 class EvidenceReconciliation(Base, TimestampMixin):
     """Exactly-once marker for lifecycle reconciliation of one scan."""
 
@@ -120,4 +136,6 @@ class EvidenceReconciliation(Base, TimestampMixin):
     observation_set_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     finding_count: Mapped[int] = mapped_column(Integer, nullable=False)
     plan_complete: Mapped[bool | None] = mapped_column(Boolean)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    applied_to_lifecycle: Mapped[bool] = mapped_column(Boolean, nullable=False)
     reconciled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

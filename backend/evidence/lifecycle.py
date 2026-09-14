@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.incidents import (
+    EvidenceCursor,
     EvidenceReconciliation,
     FindingIncident,
     FindingOccurrence,
@@ -34,6 +35,7 @@ class LifecycleResult:
     reopened: int = 0
     resolved: int = 0
     already_reconciled: bool = False
+    stale_ignored: bool = False
     resolution_performed: bool = False
 
 
@@ -66,7 +68,9 @@ def finding_fingerprint(finding: DriftEvidence) -> str:
 def remediation_branch_for_fingerprint(fingerprint: str) -> str:
     """Return the stable GitHub branch reserved for one incident identity."""
     if not _FINGERPRINT_RE.fullmatch(fingerprint):
-        raise LifecycleReconcileError("Incident fingerprint must be a 64-character lowercase SHA-256 hex digest.")
+        raise LifecycleReconcileError(
+            "Incident fingerprint must be a 64-character lowercase SHA-256 hex digest."
+        )
     return f"driftguard/fix-{fingerprint}"
 
 
@@ -75,27 +79,39 @@ def _observation_set_digest(fingerprints: set[str]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalize persisted datetimes; SQLite may discard timezone metadata."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 async def reconcile_evidence_bundle(
     db: AsyncSession,
     *,
     workspace_id: str,
     scan_id: str,
     bundle: EvidenceBundle,
-    observed_at: datetime | None = None,
+    observed_at: datetime,
 ) -> LifecycleResult:
     """Reconcile one redacted Evidence Bundle into workspace incident state.
 
     The caller owns the surrounding transaction. Reconciliation is exactly-once
-    per scan ID: replays with byte-equivalent incident identity are no-ops, and
-    a replay whose evidence set or completeness differs fails closed.
+    per scan ID: replays with identical evidence are no-ops, while a replay with
+    different evidence, completeness, or observation time fails closed.
+
+    Lifecycle mutations are monotonic by ``observed_at``. A scan that arrives
+    after a newer workspace observation is recorded as stale and performs no
+    incident transitions. This prevents late workers from resolving or reopening
+    incidents based on superseded infrastructure state.
 
     Missing incidents are resolved only when ``bundle.plan_complete is True``.
     Terraform/OpenTofu may emit incomplete/deferred plans; absence from such a
     plan is not proof that previously observed drift disappeared.
     """
-    observed_at = observed_at or datetime.now(UTC)
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
         raise LifecycleReconcileError("observed_at must be timezone-aware.")
+    observed_at = observed_at.astimezone(UTC)
 
     observations: dict[str, DriftEvidence] = {}
     for finding in bundle.findings:
@@ -138,11 +154,37 @@ async def reconcile_evidence_bundle(
             or marker.observation_set_digest != observation_digest
             or marker.finding_count != len(observations)
             or marker.plan_complete is not bundle.plan_complete
+            or _as_utc(marker.observed_at) != observed_at
         ):
             raise LifecycleReconcileError(
                 "Scan replay differs from the evidence already reconciled for this scan ID."
             )
-        return LifecycleResult(already_reconciled=True)
+        return LifecycleResult(
+            already_reconciled=True,
+            stale_ignored=not marker.applied_to_lifecycle,
+        )
+
+    cursor_result = await db.execute(
+        select(EvidenceCursor)
+        .where(EvidenceCursor.workspace_id == workspace_id)
+        .with_for_update()
+    )
+    cursor = cursor_result.scalar_one_or_none()
+    if cursor is not None and observed_at <= _as_utc(cursor.latest_observed_at):
+        db.add(
+            EvidenceReconciliation(
+                scan_id=scan_id,
+                workspace_id=workspace_id,
+                observation_set_digest=observation_digest,
+                finding_count=len(observations),
+                plan_complete=bundle.plan_complete,
+                observed_at=observed_at,
+                applied_to_lifecycle=False,
+                reconciled_at=datetime.now(UTC),
+            )
+        )
+        await db.flush()
+        return LifecycleResult(stale_ignored=True)
 
     incidents_result = await db.execute(
         select(FindingIncident).where(
@@ -150,7 +192,14 @@ async def reconcile_evidence_bundle(
             FindingIncident.identity_version == IDENTITY_VERSION,
         )
     )
-    incidents = {incident.fingerprint: incident for incident in incidents_result.scalars().all()}
+    incidents = {
+        incident.fingerprint: incident for incident in incidents_result.scalars().all()
+    }
+    for incident in incidents.values():
+        if incident.status not in {INCIDENT_OPEN, INCIDENT_RESOLVED}:
+            raise LifecycleReconcileError(
+                f"Incident {incident.id} has unsupported lifecycle status {incident.status!r}."
+            )
 
     created = 0
     observed_existing = 0
@@ -191,12 +240,8 @@ async def reconcile_evidence_bundle(
                 incident.reopened_at = observed_at
                 incident.reopen_count += 1
                 reopened += 1
-            elif incident.status == INCIDENT_OPEN:
-                observed_existing += 1
             else:
-                raise LifecycleReconcileError(
-                    f"Incident {incident.id} has unsupported lifecycle status {incident.status!r}."
-                )
+                observed_existing += 1
 
         db.add(
             FindingOccurrence(
@@ -229,9 +274,23 @@ async def reconcile_evidence_bundle(
             observation_set_digest=observation_digest,
             finding_count=len(observations),
             plan_complete=bundle.plan_complete,
-            reconciled_at=observed_at,
+            observed_at=observed_at,
+            applied_to_lifecycle=True,
+            reconciled_at=datetime.now(UTC),
         )
     )
+    if cursor is None:
+        db.add(
+            EvidenceCursor(
+                workspace_id=workspace_id,
+                latest_observed_at=observed_at,
+                latest_scan_id=scan_id,
+            )
+        )
+    else:
+        cursor.latest_observed_at = observed_at
+        cursor.latest_scan_id = scan_id
+
     await db.flush()
 
     return LifecycleResult(

@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from backend.evidence.lifecycle import (
     INCIDENT_OPEN,
+    INCIDENT_RESOLVED,
     LifecycleReconcileError,
     finding_fingerprint,
     reconcile_evidence_bundle,
@@ -17,11 +18,18 @@ from backend.evidence.lifecycle import (
 from backend.evidence.models import DriftEvidence, EvidenceBundle
 from backend.models.base import Base
 from backend.models.incidents import (
+    EvidenceCursor,
     EvidenceReconciliation,
     FindingIncident,
     FindingOccurrence,
 )
-from backend.models.models import CloudProvider, DriftScan, Organization, ScanStatus, Workspace
+from backend.models.models import (
+    CloudProvider,
+    DriftScan,
+    Organization,
+    ScanStatus,
+    Workspace,
+)
 
 
 def _finding(
@@ -263,7 +271,7 @@ async def test_clean_scan_replay_is_exactly_once_and_inconsistent_replay_fails_c
                 workspace_id=workspace_id,
                 scan_id=scan_ids[0],
                 bundle=_bundle(),
-                observed_at=t0 + timedelta(minutes=1),
+                observed_at=t0,
             )
             await db.commit()
             assert replay.already_reconciled is True
@@ -310,6 +318,7 @@ async def test_scan_workspace_mismatch_fails_before_lifecycle_mutation():
                     workspace_id=workspace_b_id,
                     scan_id=scan_ids[0],
                     bundle=_bundle(_finding()),
+                    observed_at=datetime(2026, 9, 14, 13, 0, tzinfo=UTC),
                 )
             await db.rollback()
 
@@ -318,5 +327,107 @@ async def test_scan_workspace_mismatch_fails_before_lifecycle_mutation():
                 select(func.count()).select_from(FindingIncident)
             )
             assert incident_count == 0
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_state():
+    engine, Session = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 3)
+    finding = _finding()
+    t0 = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
+
+    try:
+        async with Session() as db:
+            await reconcile_evidence_bundle(
+                db,
+                workspace_id=workspace_id,
+                scan_id=scan_ids[0],
+                bundle=_bundle(finding),
+                observed_at=t0,
+            )
+            await db.commit()
+
+        async with Session() as db:
+            resolved = await reconcile_evidence_bundle(
+                db,
+                workspace_id=workspace_id,
+                scan_id=scan_ids[2],
+                bundle=_bundle(),
+                observed_at=t0 + timedelta(hours=2),
+            )
+            await db.commit()
+            assert resolved.resolved == 1
+
+        async with Session() as db:
+            stale = await reconcile_evidence_bundle(
+                db,
+                workspace_id=workspace_id,
+                scan_id=scan_ids[1],
+                bundle=_bundle(finding),
+                observed_at=t0 + timedelta(hours=1),
+            )
+            await db.commit()
+            assert stale.stale_ignored is True
+            assert stale.reopened == 0
+
+        async with Session() as db:
+            incident = (
+                await db.execute(
+                    select(FindingIncident).where(FindingIncident.workspace_id == workspace_id)
+                )
+            ).scalar_one()
+            assert incident.status == INCIDENT_RESOLVED
+            assert incident.occurrence_count == 1
+            assert incident.reopen_count == 0
+
+            stale_marker = (
+                await db.execute(
+                    select(EvidenceReconciliation).where(
+                        EvidenceReconciliation.scan_id == scan_ids[1]
+                    )
+                )
+            ).scalar_one()
+            assert stale_marker.applied_to_lifecycle is False
+
+            cursor = (
+                await db.execute(
+                    select(EvidenceCursor).where(EvidenceCursor.workspace_id == workspace_id)
+                )
+            ).scalar_one()
+            assert cursor.latest_scan_id == scan_ids[2]
+
+        async with Session() as db:
+            replay = await reconcile_evidence_bundle(
+                db,
+                workspace_id=workspace_id,
+                scan_id=scan_ids[1],
+                bundle=_bundle(finding),
+                observed_at=t0 + timedelta(hours=1),
+            )
+            await db.commit()
+            assert replay.already_reconciled is True
+            assert replay.stale_ignored is True
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_timezone_naive_observation_is_rejected():
+    engine, Session = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 1)
+
+    try:
+        async with Session() as db:
+            with pytest.raises(LifecycleReconcileError, match="timezone-aware"):
+                await reconcile_evidence_bundle(
+                    db,
+                    workspace_id=workspace_id,
+                    scan_id=scan_ids[0],
+                    bundle=_bundle(_finding()),
+                    observed_at=datetime(2026, 9, 14, 13, 0),
+                )
+            await db.rollback()
     finally:
         await engine.dispose()
