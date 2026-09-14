@@ -3,12 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from pydantic import ValidationError
 
-from .models import IaCEngine
 from .terraform_plan import PlanEvidenceError, analyze_plan_json
 
 
