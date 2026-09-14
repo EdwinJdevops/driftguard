@@ -43,11 +43,11 @@ attribution, security context, cost context and independent evidence, but an
 enrichment failure cannot manufacture a drift finding or a deletion.
 
 The first production-facing core primitive is a versioned **Evidence Bundle**.
-It contains resource identity, change actions, changed paths, sensitivity
-paths, plan-format metadata and IaC-engine metadata. It deliberately omits raw
-`before` and `after` values.
+It contains resource identity, change actions, changed paths, sensitivity and
+unknown-value paths, plan-format/completeness metadata and IaC-engine metadata.
+It deliberately omits raw `before` and `after` values.
 
-## Security boundary
+## Security and correctness boundary
 
 `terraform show -json` may expose sensitive state/plan values in plaintext.
 Therefore raw plan JSON is treated as sensitive execution-boundary data.
@@ -58,12 +58,23 @@ Evidence-core v1 follows these invariants:
 2. Changed locations are represented only as RFC 6901 JSON-pointer paths.
 3. Terraform/OpenTofu sensitivity masks are preserved as path metadata, never
    as raw sensitive values.
-4. An errored plan is rejected rather than converted into apparently complete
+4. `after_unknown` locations are preserved as `unknown_paths`; an unknown value
+   is never silently represented as a known null.
+5. An errored plan is rejected rather than converted into apparently complete
    evidence.
-5. Unknown major JSON-format versions are rejected. Unknown minor fields are
+6. State JSON is rejected as the wrong input type rather than being interpreted
+   as a clean plan merely because it has no `resource_drift` collection.
+7. Unknown major JSON-format versions are rejected. Unknown minor fields are
    ignored for forward compatibility within major format v1.
-6. Absolute resource addresses are opaque identifiers and are never rebuilt
+8. Absolute resource addresses are opaque identifiers and are never rebuilt
    from `type`, `name`, module or index components.
+9. `previous_address` and the opaque `deposed` key are preserved when present;
+   Terraform/OpenTofu document `address + deposed` as the unique identity of a
+   deposed change object.
+10. JSON arrays are not interpreted as stable element-addressable collections
+    without provider schema. Terraform/OpenTofu lower lists, sets and tuples to
+    the same JSON array representation, so an array-level change is reported at
+    its parent pointer instead of manufacturing numeric element precision.
 
 ## Initial Evidence Bundle v1 contract
 
@@ -74,6 +85,8 @@ Top level:
 - `iac_engine_version`: version reported by the input plan when available
 - `source_format_version`: Terraform/OpenTofu JSON format version
 - `plan_timestamp`: observation timestamp when present
+- `plan_applyable`: provider-native plan flag when present
+- `plan_complete`: provider-native plan completeness flag when present
 - `redaction_policy`: `omit_change_values`
 - `findings`: zero or more drift-evidence records
 - `skipped_nonmanaged`: number of non-managed entries intentionally skipped
@@ -81,12 +94,15 @@ Top level:
 Each finding contains:
 
 - exact `resource_address`
+- optional exact `previous_resource_address`
 - optional exact `module_address`
+- optional opaque `deposed_key`
 - `resource_type`, `resource_name`, optional `resource_index`
 - optional `provider_name`
 - provider-native change `actions`
-- `changed_paths` as JSON pointers
+- conservative `changed_paths` as JSON pointers
 - `sensitive_paths` as JSON pointers
+- `unknown_paths` as JSON pointers
 
 No raw infrastructure values are part of this schema.
 
@@ -94,11 +110,11 @@ No raw infrastructure values are part of this schema.
 
 Evidence generation fails closed when:
 
-- the input is not plan JSON,
+- the input is not a plan representation,
 - `format_version` is missing or has an unsupported major version,
 - the plan reports `errored=true`,
 - a `resource_drift` entry is structurally malformed,
-- a sensitivity mask has an unsupported shape.
+- a sensitivity or unknown-value mask has an unsupported shape.
 
 A failure to adjudicate is not converted to "no drift".
 
@@ -138,6 +154,12 @@ specification for a generic external diff engine.
 Rejected as the default architecture because plan/state JSON may contain
 plaintext secrets. Local-first redaction is the required direction.
 
+### Infer collection-element paths from JSON array indexes
+
+Rejected without provider schema. The JSON format intentionally loses the
+list/set/tuple distinction, so positional interpretation can invent identity
+that does not exist for set-valued attributes or nested blocks.
+
 ### Auto-apply remediation
 
 Rejected for the initial production architecture. DriftGuard will produce
@@ -150,7 +172,7 @@ approval remains the execution boundary.
 2. Introduce Evidence Bundle v1 and plan-JSON analyzer behind tests.
 3. Add real Terraform/OpenTofu-generated fixture plans for modules, `count`,
    `for_each`, deletions, updates, sensitive values and partial failures.
-4. Add a local CLI entry point that analyzes an existing plan JSON without
+4. Add a local analysis entry point that analyzes an existing plan JSON without
    uploading raw state/plan values.
 5. Introduce finding lifecycle identity and deduplication on evidence records.
 6. Add optional CloudTrail/security/cost enrichers that cannot change the
@@ -164,5 +186,5 @@ approval remains the execution boundary.
 The legacy detector must not be presented as production-grade while it remains
 the authoritative scan path. The evidence core becomes eligible to replace it
 only after real provider-generated fixtures prove correct behavior for modules,
-`count`, `for_each`, sensitive paths, resource deletion, provider failure and
-unsupported/unknown input states.
+`count`, `for_each`, sensitive/unknown paths, resource deletion, provider
+failure, deposed identity and unsupported/unknown input states.

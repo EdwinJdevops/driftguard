@@ -40,10 +40,22 @@ def analyze_plan_json(
             f"Unsupported plan JSON major format version: {format_version}."
         )
 
-    if plan.get("errored") is True:
+    # A Terraform/OpenTofu state JSON document also has format_version and
+    # terraform_version, but plan representations include an explicit boolean
+    # `errored` field. Requiring it prevents a state file from being silently
+    # interpreted as a clean plan with no resource_drift entries.
+    errored = plan.get("errored")
+    if not isinstance(errored, bool):
+        raise PlanEvidenceError(
+            "Input is not a plan representation: expected boolean plan field 'errored'."
+        )
+    if errored:
         raise PlanEvidenceError(
             "Refusing to produce drift evidence from an errored plan because the observation may be incomplete."
         )
+
+    applyable = _optional_bool(plan, "applyable")
+    complete = _optional_bool(plan, "complete")
 
     resource_drift = plan.get("resource_drift", [])
     if not isinstance(resource_drift, list):
@@ -67,23 +79,17 @@ def analyze_plan_json(
         resource_type = _required_string(raw, "type", position)
         resource_name = _required_string(raw, "name", position)
 
-        module_address = raw.get("module_address")
-        if module_address is not None and not isinstance(module_address, str):
-            raise PlanEvidenceError(
-                f"resource_drift[{position}].module_address must be a string when present."
-            )
-
-        provider_name = raw.get("provider_name")
-        if provider_name is not None and not isinstance(provider_name, str):
-            raise PlanEvidenceError(
-                f"resource_drift[{position}].provider_name must be a string when present."
-            )
+        previous_address = _optional_string(raw, "previous_address", position)
+        module_address = _optional_string(raw, "module_address", position)
+        deposed_key = _optional_string(raw, "deposed", position)
+        provider_name = _optional_string(raw, "provider_name", position)
 
         resource_index = raw.get("index")
-        if resource_index is not None and not isinstance(resource_index, (str, int)):
-            raise PlanEvidenceError(
-                f"resource_drift[{position}].index must be a string or integer when present."
-            )
+        if resource_index is not None:
+            if isinstance(resource_index, bool) or not isinstance(resource_index, (str, int)):
+                raise PlanEvidenceError(
+                    f"resource_drift[{position}].index must be a string or integer when present."
+                )
 
         change = raw.get("change")
         if not isinstance(change, Mapping):
@@ -101,14 +107,19 @@ def analyze_plan_json(
 
         changed_paths = sorted(_diff_paths(change.get("before"), change.get("after")))
         sensitive_paths = sorted(
-            _sensitive_paths(change.get("before_sensitive"))
-            | _sensitive_paths(change.get("after_sensitive"))
+            _mask_paths(change.get("before_sensitive"), "sensitive-value")
+            | _mask_paths(change.get("after_sensitive"), "sensitive-value")
+        )
+        unknown_paths = sorted(
+            _mask_paths(change.get("after_unknown"), "unknown-value")
         )
 
         findings.append(
             DriftEvidence(
                 resource_address=address,
+                previous_resource_address=previous_address,
                 module_address=module_address,
+                deposed_key=deposed_key,
                 resource_type=resource_type,
                 resource_name=resource_name,
                 resource_index=resource_index,
@@ -116,6 +127,7 @@ def analyze_plan_json(
                 actions=actions,
                 changed_paths=changed_paths,
                 sensitive_paths=sensitive_paths,
+                unknown_paths=unknown_paths,
             )
         )
 
@@ -132,9 +144,20 @@ def analyze_plan_json(
         iac_engine_version=engine_version,
         source_format_version=format_version,
         plan_timestamp=plan_timestamp,
+        plan_applyable=applyable,
+        plan_complete=complete,
         findings=findings,
         skipped_nonmanaged=skipped_nonmanaged,
     )
+
+
+def _optional_bool(raw: Mapping[str, Any], key: str) -> bool | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise PlanEvidenceError(f"Plan field '{key}' must be boolean when present.")
+    return value
 
 
 def _required_string(raw: Mapping[str, Any], key: str, position: int) -> str:
@@ -144,13 +167,31 @@ def _required_string(raw: Mapping[str, Any], key: str, position: int) -> str:
     return value
 
 
+def _optional_string(raw: Mapping[str, Any], key: str, position: int) -> str | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise PlanEvidenceError(
+            f"resource_drift[{position}].{key} must be a non-empty string when present."
+        )
+    return value
+
+
 def _pointer_child(pointer: str, token: str | int) -> str:
     escaped = str(token).replace("~", "~0").replace("/", "~1")
     return f"{pointer}/{escaped}"
 
 
 def _diff_paths(before: Any, after: Any, pointer: str = "") -> set[str]:
-    """Return changed paths as RFC 6901 JSON pointers without retaining values."""
+    """Return changed paths as RFC 6901 JSON pointers without retaining values.
+
+    JSON plan output loses the distinction between Terraform/OpenTofu lists,
+    sets, and tuples: all three lower to JSON arrays. Without provider schema,
+    numeric array indexes can therefore create false precision (especially for
+    sets whose ordering is not semantic). If an array changes, v1 reports its
+    parent path rather than inventing element-level identity.
+    """
     if isinstance(before, Mapping) and isinstance(after, Mapping):
         changed: set[str] = set()
         for key in set(before) | set(after):
@@ -164,22 +205,15 @@ def _diff_paths(before: Any, after: Any, pointer: str = "") -> set[str]:
         return changed
 
     if isinstance(before, list) and isinstance(after, list):
-        changed = set()
-        for index in range(max(len(before), len(after))):
-            child = _pointer_child(pointer, index)
-            if index >= len(before) or index >= len(after):
-                changed.add(child)
-            else:
-                changed |= _diff_paths(before[index], after[index], child)
-        return changed
+        return {pointer} if before != after else set()
 
     if before != after:
         return {pointer}
     return set()
 
 
-def _sensitive_paths(mask: Any, pointer: str = "") -> set[str]:
-    """Collect sensitive locations from Terraform/OpenTofu sensitivity masks."""
+def _mask_paths(mask: Any, label: str, pointer: str = "") -> set[str]:
+    """Collect true locations from Terraform/OpenTofu boolean-shape masks."""
     if mask is True:
         return {pointer}
     if mask in (False, None):
@@ -188,13 +222,13 @@ def _sensitive_paths(mask: Any, pointer: str = "") -> set[str]:
     if isinstance(mask, Mapping):
         paths: set[str] = set()
         for key, value in mask.items():
-            paths |= _sensitive_paths(value, _pointer_child(pointer, key))
+            paths |= _mask_paths(value, label, _pointer_child(pointer, key))
         return paths
 
     if isinstance(mask, list):
         paths = set()
         for index, value in enumerate(mask):
-            paths |= _sensitive_paths(value, _pointer_child(pointer, index))
+            paths |= _mask_paths(value, label, _pointer_child(pointer, index))
         return paths
 
-    raise PlanEvidenceError("Sensitive-value mask contains an unsupported shape.")
+    raise PlanEvidenceError(f"{label.capitalize()} mask contains an unsupported shape.")

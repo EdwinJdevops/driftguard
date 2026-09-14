@@ -8,8 +8,10 @@ from backend.evidence import PlanEvidenceError, analyze_plan_json
 def _plan(*drift: dict, **overrides) -> dict:
     plan = {
         "format_version": "1.2",
-        "terraform_version": "1.14.0",
+        "terraform_version": "1.16.2",
         "timestamp": "2026-09-14T10:00:00Z",
+        "applyable": True,
+        "complete": True,
         "errored": False,
         "resource_drift": list(drift),
     }
@@ -25,9 +27,12 @@ def _drift(
     after: object | None = None,
     before_sensitive: object | None = None,
     after_sensitive: object | None = None,
+    after_unknown: object | None = None,
     actions: list[str] | None = None,
+    previous_address: str | None = None,
+    deposed: str | None = None,
 ) -> dict:
-    return {
+    raw = {
         "address": address,
         "module_address": "module.compute",
         "mode": mode,
@@ -41,8 +46,14 @@ def _drift(
             "after": after if after is not None else {"instance_type": "t3.large"},
             "before_sensitive": before_sensitive if before_sensitive is not None else {},
             "after_sensitive": after_sensitive if after_sensitive is not None else {},
+            "after_unknown": after_unknown if after_unknown is not None else {},
         },
     }
+    if previous_address is not None:
+        raw["previous_address"] = previous_address
+    if deposed is not None:
+        raw["deposed"] = deposed
+    return raw
 
 
 def test_preserves_absolute_resource_identity_from_plan_json():
@@ -54,6 +65,20 @@ def test_preserves_absolute_resource_identity_from_plan_json():
     assert finding.module_address == "module.compute"
     assert finding.resource_index == "blue"
     assert finding.provider_name == "registry.terraform.io/hashicorp/aws"
+    assert bundle.plan_applyable is True
+    assert bundle.plan_complete is True
+
+
+def test_preserves_previous_address_and_deposed_object_identity():
+    drift = _drift(
+        previous_address='module.old.aws_instance.web["blue"]',
+        deposed="deadbeef",
+    )
+
+    finding = analyze_plan_json(_plan(drift)).findings[0]
+
+    assert finding.previous_resource_address == 'module.old.aws_instance.web["blue"]'
+    assert finding.deposed_key == "deadbeef"
 
 
 def test_emits_changed_paths_without_persisting_raw_values():
@@ -93,6 +118,35 @@ def test_changed_paths_use_json_pointer_escaping():
     assert finding.changed_paths == ["/tags/team~1name~0legacy"]
 
 
+def test_array_changes_collapse_to_parent_path_without_provider_schema():
+    plan = _plan(
+        _drift(
+            before={"rules": [{"name": "a"}, {"name": "b"}]},
+            after={"rules": [{"name": "b"}, {"name": "a"}]},
+        )
+    )
+
+    finding = analyze_plan_json(plan).findings[0]
+
+    assert finding.changed_paths == ["/rules"]
+    assert "/rules/0/name" not in finding.changed_paths
+
+
+def test_unknown_value_mask_is_preserved_without_exposing_values():
+    plan = _plan(
+        _drift(
+            before={"endpoint": "old.example"},
+            after={"endpoint": None},
+            after_unknown={"endpoint": True},
+        )
+    )
+
+    finding = analyze_plan_json(plan).findings[0]
+
+    assert finding.changed_paths == ["/endpoint"]
+    assert finding.unknown_paths == ["/endpoint"]
+
+
 def test_whole_resource_deletion_is_root_pointer_change():
     drift = _drift(
         before={"id": "i-123", "instance_type": "t3.micro"},
@@ -113,6 +167,17 @@ def test_nonmanaged_entries_are_not_adjudicated_as_managed_drift():
 
     assert bundle.findings == []
     assert bundle.skipped_nonmanaged == 1
+
+
+def test_refuses_state_json_instead_of_reporting_false_clean_plan():
+    state = {
+        "format_version": "1.0",
+        "terraform_version": "1.16.2",
+        "values": {"root_module": {"resources": []}},
+    }
+
+    with pytest.raises(PlanEvidenceError, match="not a plan representation"):
+        analyze_plan_json(state)
 
 
 def test_refuses_errored_plan_as_incomplete_evidence():

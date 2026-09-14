@@ -14,7 +14,9 @@ class DriftEvidence(BaseModel):
 
     source: Literal["resource_drift"] = "resource_drift"
     resource_address: str = Field(min_length=1)
+    previous_resource_address: str | None = None
     module_address: str | None = None
+    deposed_key: str | None = None
     resource_type: str = Field(min_length=1)
     resource_name: str = Field(min_length=1)
     resource_index: str | int | None = None
@@ -22,6 +24,7 @@ class DriftEvidence(BaseModel):
     actions: list[str]
     changed_paths: list[str]
     sensitive_paths: list[str]
+    unknown_paths: list[str]
 
 
 class EvidenceBundle(BaseModel):
@@ -34,6 +37,8 @@ class EvidenceBundle(BaseModel):
     iac_engine_version: str | None = None
     source_format_version: str = Field(min_length=1)
     plan_timestamp: str | None = None
+    plan_applyable: bool | None = None
+    plan_complete: bool | None = None
     redaction_policy: Literal["omit_change_values"] = "omit_change_values"
     findings: list[DriftEvidence]
     skipped_nonmanaged: int = Field(default=0, ge=0)
