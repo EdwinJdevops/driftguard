@@ -25,7 +25,14 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from .models import incidents as incident_models
+from .models import models as core_models
 from .models.base import Base
+
+# Register every ORM table with Base.metadata even when this module is used
+# outside backend.api.main. create_all() otherwise depends on unrelated import
+# order and can silently omit tables in scripts/tests.
+_REGISTERED_MODEL_MODULES = (core_models, incident_models)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
