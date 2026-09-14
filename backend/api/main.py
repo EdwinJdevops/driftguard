@@ -271,12 +271,11 @@ def register_routes(app: FastAPI):
         """
         Called after the customer has created the IAM role in AWS. Confirms:
           1. The role is actually assumable with the correct external ID.
-          2. The trust policy enforces the external ID condition — i.e. it
-             does NOT also accept a wrong/blank external ID.
+          2. The trust policy rejects an otherwise-equivalent AssumeRole call
+             when only the external ID is changed to an invalid value.
         A workspace with a role_arn is not usable for scanning until this
-        passes; failing closed here is deliberate — an unverified role could
-        mean either a broken setup (scans fail) or a misconfigured trust
-        policy open to any AWS account (a real, exploitable hole).
+        passes. Failing closed avoids treating an ambiguous authorization
+        failure as proof that the required sts:ExternalId isolation exists.
         """
         ws_result = await db.execute(
             select(Workspace).where(Workspace.id == workspace_id, Workspace.org_id == org.id)
@@ -306,9 +305,9 @@ def register_routes(app: FastAPI):
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "Role is assumable WITHOUT the correct external ID — the trust policy "
-                    "does not enforce sts:ExternalId. This role is exploitable by any AWS "
-                    "account that guesses the ARN. Fix the trust policy Condition block before retrying."
+                    "Role accepted an otherwise-equivalent AssumeRole request with the wrong external ID. "
+                    "DriftGuard cannot verify the required sts:ExternalId isolation. "
+                    "Fix the trust policy Condition block before retrying."
                 ),
             )
 
@@ -391,12 +390,21 @@ def register_routes(app: FastAPI):
         org: Organization = Depends(verify_api_key),
         db: AsyncSession = Depends(get_db),
     ):
-        result = await db.execute(select(DriftScan).where(DriftScan.id == scan_id))
+        result = await db.execute(
+            select(DriftScan)
+            .join(Workspace, DriftScan.workspace_id == Workspace.id)
+            .where(DriftScan.id == scan_id, Workspace.org_id == org.id)
+        )
         scan = result.scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found.")
 
-        findings_result = await db.execute(select(DriftFinding).where(DriftFinding.scan_id == scan_id))
+        findings_result = await db.execute(
+            select(DriftFinding).where(
+                DriftFinding.scan_id == scan.id,
+                DriftFinding.workspace_id == scan.workspace_id,
+            )
+        )
         findings = findings_result.scalars().all()
 
         return {

@@ -11,8 +11,8 @@ import time
 
 import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.table import Table
 
 from .client import DriftGuardAPIError, DriftGuardClient
 from .config import Config
