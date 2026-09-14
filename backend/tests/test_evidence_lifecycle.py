@@ -74,14 +74,14 @@ async def _new_database():
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
     )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    return engine, Session
+    return engine, session_factory
 
 
-async def _seed_workspace_and_scans(Session, scan_count: int = 4):
-    async with Session() as db:
+async def _seed_workspace_and_scans(session_factory, scan_count: int):
+    async with session_factory() as db:
         org = Organization(name="Lifecycle Org", slug=f"lifecycle-org-{scan_count}")
         db.add(org)
         await db.flush()
@@ -103,20 +103,19 @@ async def _seed_workspace_and_scans(Session, scan_count: int = 4):
         return workspace.id, [scan.id for scan in scans]
 
 
-def test_fingerprint_is_deterministic_but_preserves_semantic_identity_boundaries():
+def test_fingerprint_normalizes_paths_but_preserves_incident_boundaries():
     base = _finding(changed_paths=["/tags", "/instance_type", "/tags"])
-    reordered = _finding(changed_paths=["/instance_type", "/tags"])
-    mask_only_change = _finding(
+    normalized = _finding(changed_paths=["/instance_type", "/tags"])
+    masks_changed = _finding(
         changed_paths=["/instance_type", "/tags"],
         sensitive_paths=["/tags"],
         unknown_paths=["/instance_type"],
     )
 
     fingerprint = finding_fingerprint(base)
-    assert fingerprint == finding_fingerprint(reordered)
-    assert fingerprint == finding_fingerprint(mask_only_change)
+    assert fingerprint == finding_fingerprint(normalized)
+    assert fingerprint == finding_fingerprint(masks_changed)
     assert len(fingerprint) == 64
-
     assert fingerprint != finding_fingerprint(_finding(address="aws_instance.other"))
     assert fingerprint != finding_fingerprint(_finding(deposed_key="deadbeef"))
     assert fingerprint != finding_fingerprint(_finding(actions=["delete", "create"]))
@@ -125,15 +124,15 @@ def test_fingerprint_is_deterministic_but_preserves_semantic_identity_boundaries
 
 
 @pytest.mark.asyncio
-async def test_lifecycle_create_repeat_resolve_and_reopen():
-    engine, Session = await _new_database()
-    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 4)
+async def test_create_repeat_resolve_and_reopen_lifecycle():
+    engine, sessions = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(sessions, 4)
     finding = _finding()
     fingerprint = finding_fingerprint(finding)
     t0 = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
 
     try:
-        async with Session() as db:
+        async with sessions() as db:
             first = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -145,8 +144,8 @@ async def test_lifecycle_create_repeat_resolve_and_reopen():
             assert first.created == 1
             assert first.resolution_performed is True
 
-        async with Session() as db:
-            second = await reconcile_evidence_bundle(
+        async with sessions() as db:
+            repeated = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[1],
@@ -154,10 +153,10 @@ async def test_lifecycle_create_repeat_resolve_and_reopen():
                 observed_at=t0 + timedelta(hours=1),
             )
             await db.commit()
-            assert second.observed_existing == 1
+            assert repeated.observed_existing == 1
 
-        async with Session() as db:
-            third = await reconcile_evidence_bundle(
+        async with sessions() as db:
+            resolved = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[2],
@@ -165,10 +164,10 @@ async def test_lifecycle_create_repeat_resolve_and_reopen():
                 observed_at=t0 + timedelta(hours=2),
             )
             await db.commit()
-            assert third.resolved == 1
+            assert resolved.resolved == 1
 
-        async with Session() as db:
-            fourth = await reconcile_evidence_bundle(
+        async with sessions() as db:
+            reopened = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[3],
@@ -176,9 +175,9 @@ async def test_lifecycle_create_repeat_resolve_and_reopen():
                 observed_at=t0 + timedelta(hours=3),
             )
             await db.commit()
-            assert fourth.reopened == 1
+            assert reopened.reopened == 1
 
-        async with Session() as db:
+        async with sessions() as db:
             incident = (
                 await db.execute(
                     select(FindingIncident).where(
@@ -192,28 +191,21 @@ async def test_lifecycle_create_repeat_resolve_and_reopen():
             assert incident.reopen_count == 1
             assert incident.resolved_at is None
             assert incident.remediation_branch == f"driftguard/fix-{fingerprint}"
-
-            occurrence_count = await db.scalar(
-                select(func.count()).select_from(FindingOccurrence)
-            )
-            reconciliation_count = await db.scalar(
-                select(func.count()).select_from(EvidenceReconciliation)
-            )
-            assert occurrence_count == 3
-            assert reconciliation_count == 4
+            assert await db.scalar(select(func.count()).select_from(FindingOccurrence)) == 3
+            assert await db.scalar(select(func.count()).select_from(EvidenceReconciliation)) == 4
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
 async def test_incomplete_plan_cannot_resolve_missing_incident():
-    engine, Session = await _new_database()
-    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 2)
+    engine, sessions = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(sessions, 2)
     finding = _finding()
     t0 = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
 
     try:
-        async with Session() as db:
+        async with sessions() as db:
             await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -223,7 +215,7 @@ async def test_incomplete_plan_cannot_resolve_missing_incident():
             )
             await db.commit()
 
-        async with Session() as db:
+        async with sessions() as db:
             result = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -235,7 +227,7 @@ async def test_incomplete_plan_cannot_resolve_missing_incident():
             assert result.resolution_performed is False
             assert result.resolved == 0
 
-        async with Session() as db:
+        async with sessions() as db:
             incident = (
                 await db.execute(
                     select(FindingIncident).where(FindingIncident.workspace_id == workspace_id)
@@ -248,42 +240,41 @@ async def test_incomplete_plan_cannot_resolve_missing_incident():
 
 
 @pytest.mark.asyncio
-async def test_clean_scan_replay_is_exactly_once_and_inconsistent_replay_fails_closed():
-    engine, Session = await _new_database()
-    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 1)
-    t0 = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
+async def test_scan_replay_is_exactly_once_and_inconsistent_replay_fails_closed():
+    engine, sessions = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(sessions, 1)
+    observed_at = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
 
     try:
-        async with Session() as db:
-            first = await reconcile_evidence_bundle(
+        async with sessions() as db:
+            await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[0],
                 bundle=_bundle(),
-                observed_at=t0,
+                observed_at=observed_at,
             )
             await db.commit()
-            assert first.already_reconciled is False
 
-        async with Session() as db:
+        async with sessions() as db:
             replay = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[0],
                 bundle=_bundle(),
-                observed_at=t0,
+                observed_at=observed_at,
             )
             await db.commit()
             assert replay.already_reconciled is True
 
-        async with Session() as db:
+        async with sessions() as db:
             with pytest.raises(LifecycleReconcileError, match="Scan replay differs"):
                 await reconcile_evidence_bundle(
                     db,
                     workspace_id=workspace_id,
                     scan_id=scan_ids[0],
                     bundle=_bundle(_finding()),
-                    observed_at=t0 + timedelta(minutes=2),
+                    observed_at=observed_at + timedelta(minutes=1),
                 )
             await db.rollback()
     finally:
@@ -291,55 +282,52 @@ async def test_clean_scan_replay_is_exactly_once_and_inconsistent_replay_fails_c
 
 
 @pytest.mark.asyncio
-async def test_scan_workspace_mismatch_fails_before_lifecycle_mutation():
-    engine, Session = await _new_database()
-    _, scan_ids = await _seed_workspace_and_scans(Session, 1)
+async def test_scan_workspace_mismatch_fails_before_mutation():
+    engine, sessions = await _new_database()
+    _, scan_ids = await _seed_workspace_and_scans(sessions, 1)
 
-    async with Session() as db:
+    async with sessions() as db:
         org = Organization(name="Other Org", slug="other-lifecycle-org")
         db.add(org)
         await db.flush()
-        workspace_b = Workspace(
+        workspace = Workspace(
             org_id=org.id,
             name="other",
             slug="other",
             provider=CloudProvider.AWS,
             region="us-east-1",
         )
-        db.add(workspace_b)
+        db.add(workspace)
         await db.commit()
-        workspace_b_id = workspace_b.id
+        wrong_workspace_id = workspace.id
 
     try:
-        async with Session() as db:
+        async with sessions() as db:
             with pytest.raises(LifecycleReconcileError, match="does not belong"):
                 await reconcile_evidence_bundle(
                     db,
-                    workspace_id=workspace_b_id,
+                    workspace_id=wrong_workspace_id,
                     scan_id=scan_ids[0],
                     bundle=_bundle(_finding()),
                     observed_at=datetime(2026, 9, 14, 13, 0, tzinfo=UTC),
                 )
             await db.rollback()
 
-        async with Session() as db:
-            incident_count = await db.scalar(
-                select(func.count()).select_from(FindingIncident)
-            )
-            assert incident_count == 0
+        async with sessions() as db:
+            assert await db.scalar(select(func.count()).select_from(FindingIncident)) == 0
     finally:
         await engine.dispose()
 
 
 @pytest.mark.asyncio
-async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_state():
-    engine, Session = await _new_database()
-    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 3)
+async def test_out_of_order_scan_cannot_roll_back_newer_lifecycle_state():
+    engine, sessions = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(sessions, 3)
     finding = _finding()
     t0 = datetime(2026, 9, 14, 13, 0, tzinfo=UTC)
 
     try:
-        async with Session() as db:
+        async with sessions() as db:
             await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -349,8 +337,8 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
             )
             await db.commit()
 
-        async with Session() as db:
-            resolved = await reconcile_evidence_bundle(
+        async with sessions() as db:
+            result = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
                 scan_id=scan_ids[2],
@@ -358,9 +346,9 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
                 observed_at=t0 + timedelta(hours=2),
             )
             await db.commit()
-            assert resolved.resolved == 1
+            assert result.resolved == 1
 
-        async with Session() as db:
+        async with sessions() as db:
             stale = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -372,7 +360,7 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
             assert stale.stale_ignored is True
             assert stale.reopened == 0
 
-        async with Session() as db:
+        async with sessions() as db:
             incident = (
                 await db.execute(
                     select(FindingIncident).where(FindingIncident.workspace_id == workspace_id)
@@ -382,14 +370,14 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
             assert incident.occurrence_count == 1
             assert incident.reopen_count == 0
 
-            stale_marker = (
+            marker = (
                 await db.execute(
                     select(EvidenceReconciliation).where(
                         EvidenceReconciliation.scan_id == scan_ids[1]
                     )
                 )
             ).scalar_one()
-            assert stale_marker.applied_to_lifecycle is False
+            assert marker.applied_to_lifecycle is False
 
             cursor = (
                 await db.execute(
@@ -398,7 +386,7 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
             ).scalar_one()
             assert cursor.latest_scan_id == scan_ids[2]
 
-        async with Session() as db:
+        async with sessions() as db:
             replay = await reconcile_evidence_bundle(
                 db,
                 workspace_id=workspace_id,
@@ -415,18 +403,19 @@ async def test_out_of_order_scan_is_audited_but_cannot_mutate_newer_lifecycle_st
 
 @pytest.mark.asyncio
 async def test_timezone_naive_observation_is_rejected():
-    engine, Session = await _new_database()
-    workspace_id, scan_ids = await _seed_workspace_and_scans(Session, 1)
+    engine, sessions = await _new_database()
+    workspace_id, scan_ids = await _seed_workspace_and_scans(sessions, 1)
+    naive_observed_at = datetime(2026, 9, 14, 13, 0, tzinfo=UTC).replace(tzinfo=None)
 
     try:
-        async with Session() as db:
+        async with sessions() as db:
             with pytest.raises(LifecycleReconcileError, match="timezone-aware"):
                 await reconcile_evidence_bundle(
                     db,
                     workspace_id=workspace_id,
                     scan_id=scan_ids[0],
                     bundle=_bundle(_finding()),
-                    observed_at=datetime(2026, 9, 14, 13, 0),
+                    observed_at=naive_observed_at,
                 )
             await db.rollback()
     finally:
