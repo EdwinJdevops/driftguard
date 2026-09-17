@@ -19,7 +19,7 @@ from backend.models.base import Base
 _REGISTERED_MODEL_MODULES = (core_models, incident_models)
 
 LEGACY_REVISION = "0001_legacy_baseline"
-HEAD_REVISION = "0002_evidence_lifecycle"
+HEAD_REVISION = "0003_evidence_submissions"
 
 LEGACY_COLUMNS: Mapping[str, frozenset[str]] = {
     "organizations": frozenset({"id", "name", "slug", "plan", "github_org", "stripe_customer_id", "is_active", "max_workspaces", "max_resources", "created_at", "updated_at"}),
@@ -29,7 +29,13 @@ LEGACY_COLUMNS: Mapping[str, frozenset[str]] = {
     "drift_findings": frozenset({"id", "workspace_id", "scan_id", "resource_type", "resource_id", "resource_name", "region", "status", "severity", "drift_type", "expected_state", "actual_state", "diff_summary", "security_impact", "compliance_violations", "cost_delta_monthly", "terraform_patch", "github_pr_url", "github_pr_number", "resolved_at", "resolved_by", "created_at", "updated_at"}),
 }
 
-LIFECYCLE_TABLES = frozenset({"finding_incidents", "finding_occurrences", "evidence_cursors", "evidence_reconciliations"})
+LIFECYCLE_TABLES = frozenset({
+    "finding_incidents",
+    "finding_occurrences",
+    "evidence_cursors",
+    "evidence_reconciliations",
+    "evidence_submissions",
+})
 
 
 class MigrationBootstrapError(RuntimeError):

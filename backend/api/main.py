@@ -48,6 +48,7 @@ from ..models.models import (
     StateBackend,
     Workspace,
 )
+from .evidence import router as evidence_router
 
 log = structlog.get_logger(__name__)
 
@@ -156,6 +157,7 @@ def create_app() -> FastAPI:
     )
 
     register_routes(app)
+    app.include_router(evidence_router)
     return app
 
 
