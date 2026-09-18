@@ -99,7 +99,7 @@ jobs:
       - name: Produce redacted DriftGuard Evidence Bundle
         working-directory: tests/integration/aws_real
         run: |
-          python -m backend.evidence raw-plan.json             --engine terraform             --output evidence.json
+          PYTHONPATH="${GITHUB_WORKSPACE}" python -m backend.evidence raw-plan.json --engine terraform --output evidence.json
 
       - name: Verify drift semantics and redaction
         working-directory: tests/integration/aws_real
