@@ -107,6 +107,7 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          import os
           from pathlib import Path
 
           raw_bytes = Path("raw-plan.json").read_bytes()
