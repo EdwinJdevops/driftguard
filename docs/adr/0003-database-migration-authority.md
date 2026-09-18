@@ -1,6 +1,6 @@
 # ADR 0003: Make Alembic the schema authority
 
-Status: Accepted for Evidence Core branch; production cutover remains gated.
+Status: Accepted; schema-authority cutover implemented for the current single-instance Render deployment.
 
 ## Context
 
@@ -16,6 +16,7 @@ Two revisions establish the transition:
 
 - `0001_legacy_baseline` describes the schema that existed before Alembic.
 - `0002_evidence_lifecycle` adds Evidence Core incident lifecycle persistence.
+- `0003_evidence_submissions` adds redacted provider-native submission provenance and idempotency.
 
 The bootstrap command classifies the database before taking action:
 
@@ -28,9 +29,13 @@ The classifier is intentionally strict. A failed deployment is preferable to wri
 
 ## Deployment boundary
 
-The existing Render Blueprint uses a free web service. Render's pre-deploy migration hook is not available on that tier. Therefore this ADR does **not** wire migrations into the free Render startup path and does not make the new lifecycle tables a production dependency yet.
+The current Render Blueprint uses a free, single-instance web service. Render's dedicated pre-deploy migration hook is unavailable on that tier, so the Blueprint performs the migration bootstrap as the first command in the service start sequence:
 
-Production cutover requires a deployment target that can run one migration command before the API version depending on that schema becomes active, or an equivalent explicitly controlled release step.
+`python -m backend.migrations.bootstrap && uvicorn ...`
+
+Uvicorn is therefore never started if schema bootstrap fails. FastAPI startup no longer calls `Base.metadata.create_all()`; the application process is not a schema authority.
+
+This is intentionally scoped to the current single-instance deployment. Before DriftGuard is scaled to multiple API instances, the migration command must move to a one-shot release/pre-deploy job so multiple instances cannot race schema changes.
 
 ## Invariants
 
@@ -39,7 +44,8 @@ Production cutover requires a deployment target that can run one migration comma
 - Re-running bootstrap at head is idempotent.
 - ORM metadata and Alembic head must have zero pending schema operations under `alembic check`.
 - `create_all()` may remain for local tests/development, but it is not the production migration authority.
-- Evidence Core production code must not depend on a migration until the deployment path can execute that migration deterministically.
+- Uvicorn must not start if migration bootstrap fails.
+- Evidence ingestion remains opt-in even after schema bootstrap; `DRIFTGUARD_EVIDENCE_INGEST_ENABLED` defaults to false.
 
 ## Rejected alternatives
 
@@ -59,9 +65,13 @@ Rejected because concurrent application instances can race schema changes and be
 
 Rejected for the current free service because the deployment tier does not provide that capability.
 
+### Keep migrations inside FastAPI lifespan
+
+Rejected. Schema mutation happens before the application process starts, not inside application startup.
+
 ## Verification gate
 
-Before runtime cutover, CI must prove:
+CI must continue proving:
 
 - fresh bootstrap reaches Alembic head;
 - recognized legacy bootstrap preserves existing data;

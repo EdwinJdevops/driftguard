@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.auth import generate_api_key, verify_api_key
-from ..database import db_session, get_db, init_db
+from ..database import db_session, get_db
 from ..engines.drift import (
     AWSStateCollector,
     DriftAnalyzer,
@@ -117,8 +117,10 @@ class ScanTriggerRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    log.info("DriftGuard API started", db_ready=True)
+    # Schema authority lives outside the application process. Deployments must
+    # run backend.migrations.bootstrap (or alembic upgrade head on an already
+    # versioned database) before Uvicorn starts.
+    log.info("DriftGuard API started", schema_authority="alembic")
     yield
     log.info("DriftGuard API shutting down")
 
