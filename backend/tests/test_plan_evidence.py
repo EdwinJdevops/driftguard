@@ -106,6 +106,66 @@ def test_emits_changed_paths_without_persisting_raw_values():
     assert "t3.large" not in serialized
 
 
+def test_extracts_only_non_sensitive_aws_cloud_locator_metadata():
+    plan = _plan(
+        _drift(
+            before={
+                "arn": "arn:aws:ec2:us-east-1:123456789012:instance/i-123",
+                "id": "i-123",
+                "name": "web-prod",
+                "region": "us-east-1",
+                "password": "secret-before",
+            },
+            after={
+                "arn": "arn:aws:ec2:us-east-1:123456789012:instance/i-123",
+                "id": "i-123",
+                "name": "web-prod",
+                "region": "us-east-1",
+                "password": "secret-after",
+            },
+            before_sensitive={"password": True},
+            after_sensitive={"password": True},
+        )
+    )
+
+    bundle = analyze_plan_json(plan)
+    locator = bundle.findings[0].cloud_locator
+
+    assert bundle.schema_version == "1.1"
+    assert locator is not None
+    assert locator.provider == "aws"
+    assert locator.arn == "arn:aws:ec2:us-east-1:123456789012:instance/i-123"
+    assert locator.id == "i-123"
+    assert locator.name == "web-prod"
+    assert locator.region == "us-east-1"
+    serialized = bundle.model_dump_json()
+    assert "secret-before" not in serialized
+    assert "secret-after" not in serialized
+
+
+def test_cloud_locator_refuses_identity_fields_masked_sensitive_or_unknown():
+    plan = _plan(
+        _drift(
+            before={
+                "arn": "arn:aws:ssm:us-east-1:123456789012:parameter/private",
+                "id": "/private",
+                "name": "/private",
+                "region": "us-east-1",
+            },
+            after={
+                "arn": "arn:aws:ssm:us-east-1:123456789012:parameter/private",
+                "id": "/private",
+                "name": "/private",
+                "region": "us-east-1",
+            },
+            before_sensitive={"arn": True, "id": True, "name": True},
+            after_sensitive={"arn": True, "id": True, "name": True},
+        )
+    )
+
+    assert analyze_plan_json(plan).findings[0].cloud_locator is None
+
+
 def test_changed_paths_use_json_pointer_escaping():
     plan = _plan(
         _drift(

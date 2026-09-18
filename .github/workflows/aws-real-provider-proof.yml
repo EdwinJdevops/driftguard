@@ -129,9 +129,17 @@ jobs:
           assert finding["resource_type"] == "aws_ssm_parameter"
           assert "update" in finding["actions"]
           assert "/value" in finding["changed_paths"]
+          assert evidence["schema_version"] == "1.1"
           assert evidence["iac_engine"] == "terraform"
           assert evidence["iac_engine_version"] == "1.16.2"
           assert evidence["redaction_policy"] == "omit_change_values"
+
+          locator = finding["cloud_locator"]
+          assert locator["provider"] == "aws"
+          assert locator["name"] == os.environ["PARAMETER_NAME"]
+          assert locator["id"] == os.environ["PARAMETER_NAME"]
+          assert locator["region"] == os.environ["AWS_REGION"]
+          assert locator["arn"].endswith(os.environ["PARAMETER_NAME"].removeprefix("/"))
 
           print(json.dumps({
               "resource_address": finding["resource_address"],

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .models import DriftEvidence, EvidenceBundle, IaCEngine
+from .models import CloudResourceLocator, DriftEvidence, EvidenceBundle, IaCEngine
 
 
 class PlanEvidenceError(ValueError):
@@ -115,6 +115,11 @@ def analyze_plan_json(
         unknown_paths = sorted(
             _mask_paths(change.get("after_unknown"), "unknown-value")
         )
+        cloud_locator = _extract_cloud_locator(
+            provider_name=provider_name,
+            change=change,
+            blocked_paths=set(sensitive_paths) | set(unknown_paths),
+        )
 
         findings.append(
             DriftEvidence(
@@ -126,6 +131,7 @@ def analyze_plan_json(
                 resource_name=resource_name,
                 resource_index=resource_index,
                 provider_name=provider_name,
+                cloud_locator=cloud_locator,
                 actions=actions,
                 changed_paths=changed_paths,
                 sensitive_paths=sensitive_paths,
@@ -234,3 +240,50 @@ def _mask_paths(mask: Any, label: str, pointer: str = "") -> set[str]:
         return paths
 
     raise PlanEvidenceError(f"{label.capitalize()} mask contains an unsupported shape.")
+
+
+def _extract_cloud_locator(
+    *,
+    provider_name: str | None,
+    change: Mapping[str, Any],
+    blocked_paths: set[str],
+) -> CloudResourceLocator | None:
+    """Extract only well-known, non-sensitive AWS identity metadata.
+
+    This function is intentionally conservative. It does not copy arbitrary
+    provider state into evidence and it refuses any candidate field covered by
+    Terraform/OpenTofu sensitive or unknown masks.
+    """
+    if provider_name != "registry.terraform.io/hashicorp/aws":
+        return None
+    if "" in blocked_paths:
+        return None
+
+    before = change.get("before")
+    after = change.get("after")
+
+    def pick(field: str) -> str | None:
+        if _pointer_child("", field) in blocked_paths:
+            return None
+        for candidate in (after, before):
+            if not isinstance(candidate, Mapping):
+                continue
+            value = candidate.get(field)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    arn = pick("arn")
+    resource_id = pick("id")
+    name = pick("name")
+    region = pick("region")
+    if not any((arn, resource_id, name)):
+        return None
+
+    return CloudResourceLocator(
+        provider="aws",
+        arn=arn,
+        id=resource_id,
+        name=name,
+        region=region,
+    )
