@@ -4,13 +4,8 @@ DriftGuard — Database Layer
 Async SQLAlchemy 2.0 engine and session management.
 Works with PostgreSQL (production) and SQLite (local dev/testing).
 
-Production: set DATABASE_URL to a Postgres connection string.
-Recommended free provider: Neon.tech (serverless Postgres, no
-expiry on free tier, unlike Render's 90-day free Postgres).
-
-  postgresql+asyncpg://user:pass@host/dbname
-
-Local dev / CI: falls back to SQLite if DATABASE_URL is unset.
+Production schema changes are managed by Alembic. ``init_db()`` remains a
+local-development/test bootstrap only; it is not a migration mechanism.
 """
 
 from __future__ import annotations
@@ -25,21 +20,20 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from .db_url import normalize_database_url
+from .models import incidents as incident_models
+from .models import models as core_models
 from .models.base import Base
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite+aiosqlite:///./driftguard.db",
+_REGISTERED_MODEL_MODULES = (core_models, incident_models)
+
+DATABASE_URL = normalize_database_url(
+    os.getenv(
+        "DATABASE_URL",
+        "sqlite+aiosqlite:///./driftguard.db",
+    )
 )
 
-# Neon/Postgres URLs from providers often come as postgres:// — normalize.
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
-elif DATABASE_URL.startswith("postgresql://") and "+asyncpg" not in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
-
-# SQLite needs check_same_thread=False equivalent handled by aiosqlite driver;
-# no special connect_args required for asyncpg or aiosqlite.
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
@@ -56,7 +50,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def init_db() -> None:
-    """Create all tables. Call once on startup. Safe to call repeatedly (no-op if tables exist)."""
+    """Local dev/test bootstrap. Production deployments must run migrations."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

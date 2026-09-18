@@ -8,7 +8,7 @@ access key or secret key. Instead:
   1. Customer creates an IAM role in their account with a trust
      policy that allows DriftGuard's own AWS account to assume it,
      conditioned on a per-workspace external ID (confused-deputy
-     protection — see https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create_for-user_externalid.html).
+     protection — see https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html).
   2. DriftGuard stores only the role ARN + external ID (both
      non-sensitive; the external ID is not a secret, it's a
      correlation token).
@@ -55,39 +55,42 @@ class AssumeRoleResult:
 
 def check_role_misconfigured(role_arn: str, region: str) -> bool:
     """
-    Validates that a customer's IAM role actually enforces the external ID
-    condition, rather than trusting our external_id blindly.
+    Negative-control check for sts:ExternalId enforcement.
 
-    Attempts sts:AssumeRole with a deliberately wrong external ID. If AWS
-    rejects it (AccessDenied), the role's trust policy correctly conditions
-    on sts:ExternalId. If it unexpectedly succeeds, the customer's trust
-    policy has no external ID condition at all — the role is open to any
-    party that knows the account ID, and DriftGuard should refuse to use it.
+    This function MUST be called only after the same principal has already
+    proved it can assume ``role_arn`` with the workspace's correct external
+    ID. The negative control then repeats the same AssumeRole request shape
+    (same role ARN, session name, duration, caller and region) while changing
+    only ExternalId to a deliberately wrong value.
 
-    This mirrors the validation pattern documented by Datadog Security Labs
-    for multi-tenant SaaS integrations assuming customer-owned roles.
+    Holding the other request parameters constant is important. IAM trust
+    policies can independently constrain values such as sts:RoleSessionName;
+    changing those values as part of the negative control would make an
+    AccessDenied response ambiguous and could falsely "prove" that
+    sts:ExternalId was enforced.
+
+    Returns True if the wrong external ID is unexpectedly accepted (unsafe),
+    False when AWS rejects the otherwise-equivalent request with AccessDenied,
+    and re-raises non-authorization errors because they are not evidence either
+    way about the external-ID condition.
     """
     probe_external_id = f"probe-{secrets.token_urlsafe(16)}"
     try:
         sts = boto3.client("sts", region_name=region)
         sts.assume_role(
             RoleArn=role_arn,
-            RoleSessionName="driftguard-misconfig-check",
+            RoleSessionName=ASSUME_ROLE_SESSION_NAME,
             ExternalId=probe_external_id,
-            DurationSeconds=900,  # minimum allowed; this session is discarded immediately
+            DurationSeconds=ASSUME_ROLE_DURATION_SECONDS,
         )
-        # If assume_role succeeded with a made-up external ID, the trust
-        # policy isn't enforcing sts:ExternalId at all. Vulnerable.
         log.warning(
-            "Role has no enforced external ID condition — confused deputy risk",
+            "Role accepted a deliberately wrong external ID — confused deputy protection is not enforced",
             role_arn=role_arn,
         )
         return True
     except ClientError as e:
         if e.response.get("Error", {}).get("Code") == "AccessDenied":
-            return False  # correctly rejected the wrong external ID — properly configured
-        # Any other error (bad ARN, role doesn't exist, etc.) isn't a
-        # confused-deputy signal — surface it separately, don't claim "safe".
+            return False
         log.error("Could not evaluate role trust policy", role_arn=role_arn, error=str(e))
         raise
 

@@ -7,7 +7,6 @@ Run: pytest cli/tests/ -v
 
 import httpx
 import pytest
-
 from driftguard_cli.client import DriftGuardAPIError, DriftGuardClient
 
 
