@@ -114,10 +114,19 @@ class TerraformStateParser:
                 continue
             rtype = resource["type"]
             rname = resource["name"]
-            for instance in resource.get("instances", []):
+            instances = resource.get("instances", [])
+            for instance in instances:
                 attrs = instance.get("attributes", {})
                 rid = attrs.get("id") or f"{rtype}.{rname}"
-                key = f"{rtype}.{rname}"
+                base_key = f"{rtype}.{rname}"
+                index_key = instance.get("index_key")
+                if index_key is not None:
+                    suffix = f"[{index_key}]" if isinstance(index_key, int) else f"[{json.dumps(index_key)}]"
+                    key = f"{base_key}{suffix}"
+                elif len(instances) > 1:
+                    raise ValueError(f"Multiple unindexed Terraform instances: {base_key}")
+                else:
+                    key = base_key
                 resources[key] = {"type": rtype, "name": rname, "id": rid, "attributes": attrs}
         return resources
 
@@ -148,6 +157,7 @@ class AWSStateCollector:
                         }
         except Exception as e:
             log.error("Failed to collect EC2 instances", error=str(e))
+            raise RuntimeError("AWS EC2 instances inventory incomplete") from e
         return resources
 
     def collect_s3_buckets(self) -> dict[str, dict]:
@@ -180,6 +190,7 @@ class AWSStateCollector:
                 resources[name] = data
         except Exception as e:
             log.error("Failed to collect S3 buckets", error=str(e))
+            raise RuntimeError("AWS S3 buckets inventory incomplete") from e
         return resources
 
     def collect_security_groups(self) -> dict[str, dict]:
@@ -197,6 +208,7 @@ class AWSStateCollector:
                     }
         except Exception as e:
             log.error("Failed to collect security groups", error=str(e))
+            raise RuntimeError("AWS security groups inventory incomplete") from e
         return resources
 
     def collect_rds_instances(self) -> dict[str, dict]:
@@ -215,6 +227,7 @@ class AWSStateCollector:
                     }
         except Exception as e:
             log.error("Failed to collect RDS instances", error=str(e))
+            raise RuntimeError("AWS RDS instances inventory incomplete") from e
         return resources
 
     def collect_all(self) -> dict[str, dict[str, dict]]:
