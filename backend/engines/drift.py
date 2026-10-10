@@ -148,6 +148,7 @@ class AWSStateCollector:
                         }
         except Exception as e:
             log.error("Failed to collect EC2 instances", error=str(e))
+            raise RuntimeError("AWS EC2 instances inventory incomplete") from e
         return resources
 
     def collect_s3_buckets(self) -> dict[str, dict]:
@@ -180,6 +181,7 @@ class AWSStateCollector:
                 resources[name] = data
         except Exception as e:
             log.error("Failed to collect S3 buckets", error=str(e))
+            raise RuntimeError("AWS S3 buckets inventory incomplete") from e
         return resources
 
     def collect_security_groups(self) -> dict[str, dict]:
@@ -197,6 +199,7 @@ class AWSStateCollector:
                     }
         except Exception as e:
             log.error("Failed to collect security groups", error=str(e))
+            raise RuntimeError("AWS security groups inventory incomplete") from e
         return resources
 
     def collect_rds_instances(self) -> dict[str, dict]:
@@ -215,6 +218,7 @@ class AWSStateCollector:
                     }
         except Exception as e:
             log.error("Failed to collect RDS instances", error=str(e))
+            raise RuntimeError("AWS RDS instances inventory incomplete") from e
         return resources
 
     def collect_all(self) -> dict[str, dict[str, dict]]:
