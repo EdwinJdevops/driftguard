@@ -114,10 +114,19 @@ class TerraformStateParser:
                 continue
             rtype = resource["type"]
             rname = resource["name"]
-            for instance in resource.get("instances", []):
+            instances = resource.get("instances", [])
+            for instance in instances:
                 attrs = instance.get("attributes", {})
                 rid = attrs.get("id") or f"{rtype}.{rname}"
-                key = f"{rtype}.{rname}"
+                base_key = f"{rtype}.{rname}"
+                index_key = instance.get("index_key")
+                if index_key is not None:
+                    suffix = f"[{index_key}]" if isinstance(index_key, int) else f"[{json.dumps(index_key)}]"
+                    key = f"{base_key}{suffix}"
+                elif len(instances) > 1:
+                    raise ValueError(f"Multiple unindexed Terraform instances: {base_key}")
+                else:
+                    key = base_key
                 resources[key] = {"type": rtype, "name": rname, "id": rid, "attributes": attrs}
         return resources
 
