@@ -298,3 +298,45 @@ def test_fingerprint_differs_for_different_drift(analyzer, parser, clean_tfstate
     f1 = analyzer.analyze(tf_resources, live_a, "us-east-1")[0]
     f2 = analyzer.analyze(tf_resources, live_b, "us-east-1")[0]
     assert f1.fingerprint != f2.fingerprint
+
+
+# A failed AWS enumeration must not be converted into a false deletion.
+@pytest.mark.parametrize(
+    ("collector_method", "service", "api_method"),
+    [
+        ("collect_ec2_instances", "ec2", "get_paginator"),
+        ("collect_security_groups", "ec2", "get_paginator"),
+        ("collect_rds_instances", "rds", "get_paginator"),
+        ("collect_s3_buckets", "s3", "list_buckets"),
+    ],
+)
+def test_aws_inventory_enumeration_failure_is_fatal(
+    monkeypatch, collector_method, service, api_method
+):
+    from unittest.mock import Mock
+    from backend.engines.drift import AWSStateCollector
+
+    client = Mock()
+    getattr(client, api_method).side_effect = RuntimeError("injected AWS failure")
+    session = Mock()
+    session.client.return_value = client
+    collector = AWSStateCollector(session, "us-east-1")
+
+    with pytest.raises(RuntimeError, match="inventory incomplete"):
+        getattr(collector, collector_method)()
+
+
+def test_terraform_parser_preserves_multiple_instances(parser):
+    state = {
+        "resources": [{
+            "mode": "managed",
+            "type": "aws_instance",
+            "name": "web",
+            "instances": [
+                {"index_key": 0, "attributes": {"id": "i-one"}},
+                {"index_key": 1, "attributes": {"id": "i-two"}},
+            ],
+        }],
+    }
+    result = parser.parse(state)
+    assert {item["id"] for item in result.values()} == {"i-one", "i-two"}
