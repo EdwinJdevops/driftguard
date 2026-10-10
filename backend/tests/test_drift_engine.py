@@ -314,6 +314,7 @@ def test_aws_inventory_enumeration_failure_is_fatal(
     monkeypatch, collector_method, service, api_method
 ):
     from unittest.mock import Mock
+
     from backend.engines.drift import AWSStateCollector
 
     client = Mock()
