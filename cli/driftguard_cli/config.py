@@ -24,7 +24,7 @@ class Config:
     api_key: str | None = None
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         cfg = cls()
         if CONFIG_FILE.exists():
             try:
