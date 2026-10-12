@@ -13,9 +13,9 @@
 
 ## The problem
 
-Terraform state describes what your infrastructure *should* look like. It does not verify your infrastructure still looks like that. A security group rule changed through the console, an S3 bucket with encryption disabled mid-incident, an RDS instance flipped to publicly accessible — none of it shows up in `terraform plan` unless someone re-applies against the same resource. Most teams find out during an audit, or after an incident.
+Terraform state records the last known values of managed resources. By default, `terraform plan` refreshes those objects from their providers and compares the result with configuration, so out-of-band changes to managed attributes can appear in a normal plan. The operational gap is that drift can go unnoticed between plan runs or when plans are not reviewed. A Terraform plan is also not itself a security-risk classification or a GitHub review workflow.
 
-DriftGuard checks continuously instead, and turns every finding into a reviewable PR.
+DriftGuard offers on-demand comparisons of recorded Terraform state with live AWS observations, annotates supported discrepancies, and can propose a remediation PR for human review. It does not yet dispatch recurring scans automatically.
 
 ## Architecture
 
@@ -77,7 +77,7 @@ Self-hosted single-account deployments can skip the AssumeRole flow entirely —
 - Does not modify your infrastructure directly. It reads AWS state and Terraform state; nothing is written to either.
 - Does not auto-apply patches or splice them into your existing `.tf` files — that's an HCL-aware-parsing problem, and getting it wrong silently corrupts real infrastructure code. Patches land as new files under `driftguard-remediations/` in a PR, for human review.
 - Does not support multi-cloud yet. AWS only — Azure and GCP collectors aren't built.
-- Is not a replacement for `terraform plan`. Plan tells you what *will* change. DriftGuard tells you what already changed outside your control.
+- Does not replace `terraform plan` or its default refresh-based drift detection. A normal plan reconciles provider observations, prior state, and configuration; DriftGuard provides a separately triggered check with security annotations and optional human-reviewed remediation suggestions.
 
 ## Resource coverage
 
